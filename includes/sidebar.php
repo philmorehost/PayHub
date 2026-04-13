@@ -110,6 +110,10 @@ $role = $_SESSION['role'] ?? 'merchant';
                 <i data-lucide="settings" class="w-5 h-5"></i>
                 Platform Config
             </a>
+            <a href="<?php echo BASE_URL; ?>admin/security.php" class="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all <?php echo $current_page === 'security.php' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'; ?>">
+                <i data-lucide="shield-check" class="w-5 h-5"></i>
+                Security
+            </a>
         <?php else: ?>
             <div class="px-3 mb-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Main</div>
             <a href="<?php echo BASE_URL; ?>merchant/dashboard.php" class="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all <?php echo $current_page === 'dashboard.php' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'; ?>">

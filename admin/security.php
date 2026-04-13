@@ -5,7 +5,7 @@ require_once '../includes/functions.php';
 if (!isLoggedIn() || !isAdmin()) redirect('../login.php');
 
 use Sonata\GoogleAuthenticator\GoogleAuthenticator;
-use Sonata\GoogleAuthenticator\GoogleQrCodeGenerator;
+use Sonata\GoogleAuthenticator\GoogleQrUrl;
 
 $user = getAuthUser();
 $pageTitle = 'Security Settings - Admin Hub';
@@ -67,7 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Generate 2FA Secret if not already enabled
 if (!$user['two_factor_enabled']) {
     $new_secret = $gauth->generateSecret();
-    $qrCodeUrl = GoogleQrCodeGenerator::getURL($user['email'], 'Payhub Admin', $new_secret);
+    $qrCodeUrl = GoogleQrUrl::generate($user['email'], $new_secret, 'Payhub Admin');
 }
 
 include '../includes/dashboard-head.php';

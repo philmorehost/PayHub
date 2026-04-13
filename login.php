@@ -9,12 +9,12 @@ if (isLoggedIn()) {
 
 // Allow clearing the pending login state
 if (isset($_GET['clear_session'])) {
-    unset($_SESSION['pending_login_user_id'], $_SESSION['pending_login_role'], $_SESSION['pending_login_email']);
+    unset($_SESSION['pending_login_user_id'], $_SESSION['pending_login_role'], $_SESSION['pending_login_email'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_role']);
     redirect('login.php');
 }
 
 $error = '';
-$step = 'credentials'; // 'credentials' | 'otp'
+$step = 'credentials'; // 'credentials' | 'otp' | '2fa'
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
@@ -23,72 +23,116 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? 'verify_credentials';
 
         if ($action === 'verify_credentials') {
-        $email    = sanitize($_POST['email'] ?? '');
-        $password = $_POST['password'] ?? '';
+            $email    = sanitize($_POST['email'] ?? '');
+            $password = $_POST['password'] ?? '';
 
-        $db   = Database::connect();
-        $stmt = $db->prepare("SELECT * FROM users WHERE email = ?");
-        $stmt->execute([$email]);
-        $user = $stmt->fetch();
+            $db   = Database::connect();
+            $stmt = $db->prepare("SELECT * FROM users WHERE email = ?");
+            $stmt->execute([$email]);
+            $user = $stmt->fetch();
 
-        if ($user && password_verify($password, $user['password_hash'])) {
-            if ($user['is_suspended']) {
-                $error = "Your account has been suspended. Please contact support.";
-            } else {
-                // Store pending login in session and send OTP
-                $_SESSION['pending_login_user_id'] = $user['id'];
-                $_SESSION['pending_login_role']    = $user['role'];
-
-                if (generate_and_send_otp($email, 'login')) {
-                    $_SESSION['pending_login_email'] = $email;
-                    $step = 'otp';
+            if ($user && password_verify($password, $user['password_hash'])) {
+                if ($user['is_suspended']) {
+                    $error = "Your account has been suspended. Please contact support.";
                 } else {
-                    $error = 'Failed to send verification email. Please try again.';
-                    unset($_SESSION['pending_login_user_id'], $_SESSION['pending_login_role']);
+                    // Store pending login in session and send OTP
+                    $_SESSION['pending_login_user_id'] = $user['id'];
+                    $_SESSION['pending_login_role']    = $user['role'];
+
+                    if (generate_and_send_otp($email, 'login')) {
+                        $_SESSION['pending_login_email'] = $email;
+                        $step = 'otp';
+                    } else {
+                        $error = 'Failed to send verification email. Please try again.';
+                        unset($_SESSION['pending_login_user_id'], $_SESSION['pending_login_role']);
+                    }
+                }
+            } else {
+                $error = "Invalid email or password.";
+            }
+        } elseif ($action === 'verify_otp') {
+            $otp = trim($_POST['otp'] ?? '');
+
+            if (empty($_SESSION['pending_login_user_id']) || empty($_SESSION['pending_login_email'])) {
+                $error = 'Session expired. Please log in again.';
+            } else {
+                $email = $_SESSION['pending_login_email'];
+
+                if (verify_otp($email, $otp, 'login')) {
+                    $db = Database::connect();
+                    $stmt = $db->prepare("SELECT two_factor_enabled FROM users WHERE id = ?");
+                    $stmt->execute([$_SESSION['pending_login_user_id']]);
+                    $user_data = $stmt->fetch();
+
+                    if ($_SESSION['pending_login_role'] === 'admin' && $user_data['two_factor_enabled']) {
+                        $_SESSION['pending_2fa_user_id'] = $_SESSION['pending_login_user_id'];
+                        $_SESSION['pending_2fa_role']    = $_SESSION['pending_login_role'];
+                        $_SESSION['pending_2fa_email']   = $_SESSION['pending_login_email'];
+                        unset($_SESSION['pending_login_user_id'], $_SESSION['pending_login_role'], $_SESSION['pending_login_email']);
+                        $step = '2fa';
+                    } else {
+                        session_regenerate_id(true);
+                        $_SESSION['user_id'] = $_SESSION['pending_login_user_id'];
+                        $_SESSION['role']    = $_SESSION['pending_login_role'];
+                        $logged_email = $_SESSION['pending_login_email'];
+                        unset($_SESSION['pending_login_user_id'], $_SESSION['pending_login_role'], $_SESSION['pending_login_email']);
+
+                        if ($_SESSION['role'] === 'admin') {
+                            sendEmail($logged_email, "New Admin Login Alert", "<p>A new login was detected on your admin account at " . date('Y-m-d H:i:s') . ". If this wasn't you, please secure your account.</p>");
+                            redirect('admin/index.php');
+                        } else {
+                            redirect('merchant/dashboard.php');
+                        }
+                    }
+                } else {
+                    $error = 'Invalid or expired verification code. Please try again.';
+                    $step  = 'otp';
                 }
             }
-        } else {
-            $error = "Invalid email or password.";
-        }
-    } elseif ($action === 'verify_otp') {
-        $otp = trim($_POST['otp'] ?? '');
+        } elseif ($action === 'verify_2fa') {
+            $code = trim($_POST['2fa_code'] ?? '');
+            if (empty($_SESSION['pending_2fa_user_id'])) {
+                $error = 'Session expired. Please log in again.';
+                $step = 'credentials';
+            } else {
+                $db = Database::connect();
+                $stmt = $db->prepare("SELECT * FROM users WHERE id = ?");
+                $stmt->execute([$_SESSION['pending_2fa_user_id']]);
+                $user = $stmt->fetch();
 
-        if (empty($_SESSION['pending_login_user_id']) || empty($_SESSION['pending_login_email'])) {
-            $error = 'Session expired. Please log in again.';
-        } else {
-            $email = $_SESSION['pending_login_email'];
+                require_once 'vendor/autoload.php';
+                $gauth = new \Sonata\GoogleAuthenticator\GoogleAuthenticator();
 
-            if (verify_otp($email, $otp, 'login')) {
-                session_regenerate_id(true);
-                $_SESSION['user_id'] = $_SESSION['pending_login_user_id'];
-                $_SESSION['role']    = $_SESSION['pending_login_role'];
-                unset($_SESSION['pending_login_user_id'], $_SESSION['pending_login_role'], $_SESSION['pending_login_email']);
+                if ($gauth->checkCode($user['two_factor_secret'], $code)) {
+                    session_regenerate_id(true);
+                    $_SESSION['user_id'] = $_SESSION['pending_2fa_user_id'];
+                    $_SESSION['role']    = $_SESSION['pending_2fa_role'];
+                    $logged_email = $_SESSION['pending_2fa_email'];
+                    unset($_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_role'], $_SESSION['pending_2fa_email']);
 
-                if ($_SESSION['role'] === 'admin') {
-                    sendEmail($email, "New Admin Login Alert", "<p>A new login was detected on your admin account at " . date('Y-m-d H:i:s') . ". If this wasn't you, please secure your account.</p>");
+                    sendEmail($logged_email, "New Admin Login Alert", "<p>A new login was detected on your admin account at " . date('Y-m-d H:i:s') . ". If this wasn't you, please secure your account.</p>");
                     redirect('admin/index.php');
                 } else {
-                    redirect('merchant/dashboard.php');
+                    $error = 'Invalid 2FA code. Please try again.';
+                    $step = '2fa';
                 }
-            } else {
-                $error = 'Invalid or expired verification code. Please try again.';
-                $step  = 'otp';
             }
-        }
-    } elseif ($action === 'resend_otp') {
-        if (empty($_SESSION['pending_login_email'])) {
-            $error = 'Session expired. Please log in again.';
-        } else {
-            $email = $_SESSION['pending_login_email'];
-            if (generate_and_send_otp($email, 'login')) {
-                $step = 'otp';
+        } elseif ($action === 'resend_otp') {
+            if (empty($_SESSION['pending_login_email'])) {
+                $error = 'Session expired. Please log in again.';
             } else {
-                $error = 'Failed to resend code. Please try again.';
-                $step  = 'otp';
-            }
+                $email = $_SESSION['pending_login_email'];
+                if (generate_and_send_otp($email, 'login')) {
+                    $step = 'otp';
+                } else {
+                    $error = 'Failed to resend code. Please try again.';
+                    $step  = 'otp';
+                }
             }
         }
     }
+} elseif (isset($_SESSION['pending_2fa_user_id'])) {
+    $step = '2fa';
 } elseif (isset($_SESSION['pending_login_user_id'])) {
     $step = 'otp';
 }
@@ -97,8 +141,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 if ($step === 'otp' && (empty($_SESSION['pending_login_user_id']) || empty($_SESSION['pending_login_email']))) {
     $step = 'credentials';
 }
+if ($step === '2fa' && empty($_SESSION['pending_2fa_user_id'])) {
+    $step = 'credentials';
+}
 
-$pending_email = htmlspecialchars($_SESSION['pending_login_email'] ?? '');
+$pending_email = htmlspecialchars($_SESSION['pending_login_email'] ?? $_SESSION['pending_2fa_email'] ?? '');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -129,6 +176,9 @@ $pending_email = htmlspecialchars($_SESSION['pending_login_email'] ?? '');
             <?php if ($step === 'otp'): ?>
                 <h1 class="text-3xl font-bold text-slate-900">Check your email</h1>
                 <p class="text-slate-500 mt-2">Enter the 6-digit code sent to <strong><?php echo $pending_email; ?></strong>.</p>
+            <?php elseif ($step === '2fa'): ?>
+                <h1 class="text-3xl font-bold text-slate-900">Two-Factor Authentication</h1>
+                <p class="text-slate-500 mt-2">Enter the code from your Authenticator app</p>
             <?php else: ?>
                 <h1 class="text-3xl font-bold text-slate-900">Welcome back</h1>
                 <p class="text-slate-500 mt-2">Log in to your merchant dashboard</p>
@@ -142,7 +192,38 @@ $pending_email = htmlspecialchars($_SESSION['pending_login_email'] ?? '');
                 </div>
             <?php endif; ?>
 
-            <?php if ($step === 'otp'): ?>
+            <?php if ($step === '2fa'): ?>
+            <!-- Step 3: 2FA Verification -->
+            <form method="POST" class="space-y-6">
+                <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
+                <input type="hidden" name="action" value="verify_2fa">
+                <div>
+                    <label class="block text-sm font-bold text-slate-700 mb-2">Authenticator Code</label>
+                    <input
+                        type="text"
+                        name="2fa_code"
+                        required
+                        maxlength="6"
+                        pattern="\d{6}"
+                        autofocus
+                        class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-center text-2xl tracking-[0.5em] font-bold"
+                        placeholder="000000"
+                    >
+                </div>
+
+                <button
+                    type="submit"
+                    class="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
+                >
+                    Verify &amp; Log In <i data-lucide="arrow-right" size="20"></i>
+                </button>
+            </form>
+
+            <div class="mt-6 text-center">
+                <a href="login.php?clear_session=1" class="text-sm text-slate-500 hover:text-slate-700">Back to login</a>
+            </div>
+
+            <?php elseif ($step === 'otp'): ?>
             <!-- Step 2: OTP Verification -->
             <form method="POST" class="space-y-6">
                 <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
@@ -239,4 +320,3 @@ $pending_email = htmlspecialchars($_SESSION['pending_login_email'] ?? '');
     </script>
 </body>
 </html>
-
