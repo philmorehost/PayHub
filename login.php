@@ -17,6 +17,9 @@ $error = '';
 $step = 'credentials'; // 'credentials' | 'otp'
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die('CSRF token validation failed');
+    }
     $action = $_POST['action'] ?? 'verify_credentials';
 
     if ($action === 'verify_credentials') {
@@ -140,6 +143,7 @@ $pending_email = htmlspecialchars($_SESSION['pending_login_email'] ?? '');
             <?php if ($step === 'otp'): ?>
             <!-- Step 2: OTP Verification -->
             <form method="POST" class="space-y-6">
+                <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                 <input type="hidden" name="action" value="verify_otp">
                 <div>
                     <label class="block text-sm font-bold text-slate-700 mb-2">Verification Code</label>
@@ -165,6 +169,7 @@ $pending_email = htmlspecialchars($_SESSION['pending_login_email'] ?? '');
 
             <div class="mt-6 text-center">
                 <form method="POST" class="inline">
+                    <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                     <input type="hidden" name="action" value="resend_otp">
                     <button type="submit" class="text-sm text-indigo-600 font-bold hover:text-indigo-700">
                         Resend code
@@ -177,6 +182,7 @@ $pending_email = htmlspecialchars($_SESSION['pending_login_email'] ?? '');
             <?php else: ?>
             <!-- Step 1: Credentials -->
             <form method="POST" class="space-y-6">
+                <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                 <input type="hidden" name="action" value="verify_credentials">
                 <div>
                     <label class="block text-sm font-bold text-slate-700 mb-2">Email Address</label>

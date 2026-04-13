@@ -283,6 +283,17 @@ if ($stage === 2 && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) ENGINE=InnoDB;
 
+            CREATE TABLE IF NOT EXISTS otp_codes (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                otp_code VARCHAR(6) NOT NULL,
+                purpose ENUM('registration','login') NOT NULL,
+                expires_at DATETIME NOT NULL,
+                used TINYINT DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_email_purpose (email, purpose)
+            ) ENGINE=InnoDB;
+
             INSERT INTO blog_posts (title, slug, content, excerpt) VALUES
             ('Getting Started with Payhub Integration', 'getting-started-integration', 'Our APIs are designed to be simple, powerful, and easy to integrate...', 'Learn how to start with Payhub.'),
             ('Understanding Transaction Fees', 'understanding-fees', 'Payhub charges 1.5% + NGN 100 for local transactions...', 'A guide to Payhub pricing.'),

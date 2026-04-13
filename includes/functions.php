@@ -54,7 +54,7 @@ function ensure_critical_tables() {
     if (!isInstalled()) return;
 
     // Quick version check to avoid redundant DB calls on every request
-    $version = '1.1.2';
+    $version = '1.1.3';
     if (getConfig('sys_db_version') === $version) return;
 
     try {
@@ -672,6 +672,12 @@ function sendEmail($to, $subject, $body) {
     $site_name = getConfig('site_name', 'Payhub');
     $logo = getConfig('site_logo');
 
+    // Development Fallback: Log email instead of sending if email_mock_mode is enabled
+    if (getConfig('email_mock_mode') === '1') {
+        error_log("sendEmail (MOCKED) to {$to}: [{$subject}] " . strip_tags($body));
+        return true;
+    }
+
     // Use smtp_user as From address when smtp_from is not configured
     if (empty($smtp_from)) {
         $smtp_from = $smtp_user ?: ('noreply@' . ($_SERVER['HTTP_HOST'] ?? 'localhost'));
@@ -687,7 +693,8 @@ function sendEmail($to, $subject, $body) {
         $full_body = "<div style='padding: 40px;'>$logo_html $body</div>";
         $result = mail($to, $subject, $full_body, $headers);
         if (!$result) {
-            error_log("sendEmail: PHP mail() failed sending to {$to}");
+            $last_error = error_get_last();
+            error_log("sendEmail: PHP mail() failed sending to {$to}. Error: " . ($last_error['message'] ?? 'Unknown error'));
         }
         return $result;
     }
