@@ -54,7 +54,7 @@ function ensure_critical_tables() {
     if (!isInstalled()) return;
 
     // Quick version check to avoid redundant DB calls on every request
-    $version = '1.1.1';
+    $version = '1.1.2';
     if (getConfig('sys_db_version') === $version) return;
 
     try {
@@ -634,6 +634,7 @@ function generate_and_send_otp($email, $purpose) {
 
         return sendEmail($email, $subject, $body);
     } catch (\Throwable $e) {
+        error_log("generate_and_send_otp error [{$purpose}] for {$email}: " . $e->getMessage());
         return false;
     }
 }
@@ -671,6 +672,11 @@ function sendEmail($to, $subject, $body) {
     $site_name = getConfig('site_name', 'Payhub');
     $logo = getConfig('site_logo');
 
+    // Use smtp_user as From address when smtp_from is not configured
+    if (empty($smtp_from)) {
+        $smtp_from = $smtp_user ?: ('noreply@' . ($_SERVER['HTTP_HOST'] ?? 'localhost'));
+    }
+
     if (!$smtp_host || !$smtp_user) {
         $logo_html = '';
         if ($logo) {
@@ -679,7 +685,11 @@ function sendEmail($to, $subject, $body) {
         }
         $headers = "MIME-Version: 1.0\r\nContent-type:text/html;charset=UTF-8\r\nFrom: $site_name <$smtp_from>\r\n";
         $full_body = "<div style='padding: 40px;'>$logo_html $body</div>";
-        return mail($to, $subject, $full_body, $headers);
+        $result = mail($to, $subject, $full_body, $headers);
+        if (!$result) {
+            error_log("sendEmail: PHP mail() failed sending to {$to}");
+        }
+        return $result;
     }
 
     $mail = new PHPMailer(true);
@@ -689,7 +699,12 @@ function sendEmail($to, $subject, $body) {
         $mail->SMTPAuth   = true;
         $mail->Username   = $smtp_user;
         $mail->Password   = $smtp_pass;
-        $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        // Auto-detect encryption: port 465 uses SMTPS (SSL), everything else uses STARTTLS
+        if ((int)$smtp_port === 465) {
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
+        } else {
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        }
         $mail->Port       = $smtp_port;
         $mail->setFrom($smtp_from, $site_name);
         $mail->addAddress($to);
@@ -699,6 +714,7 @@ function sendEmail($to, $subject, $body) {
         $mail->send();
         return true;
     } catch (Exception $e) {
+        error_log("sendEmail: PHPMailer error sending to {$to}: " . $e->getMessage());
         return false;
     }
 }
