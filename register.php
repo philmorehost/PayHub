@@ -17,11 +17,11 @@ $step = 'form'; // 'form' | 'otp'
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
-        die('CSRF token validation failed');
-    }
-    $action = $_POST['action'] ?? 'send_otp';
+        $error = 'Invalid security token. Please try again.';
+    } else {
+        $action = $_POST['action'] ?? 'send_otp';
 
-    if ($action === 'send_otp') {
+        if ($action === 'send_otp') {
         $email         = sanitize($_POST['email'] ?? '');
         $password      = $_POST['password'] ?? '';
         $full_name     = sanitize($_POST['full_name'] ?? '');
@@ -97,6 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $error = 'Failed to resend code. Please try again.';
                 $step  = 'otp';
+            }
             }
         }
     }

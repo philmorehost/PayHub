@@ -18,11 +18,11 @@ $step = 'credentials'; // 'credentials' | 'otp'
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
-        die('CSRF token validation failed');
-    }
-    $action = $_POST['action'] ?? 'verify_credentials';
+        $error = 'Invalid security token. Please try again.';
+    } else {
+        $action = $_POST['action'] ?? 'verify_credentials';
 
-    if ($action === 'verify_credentials') {
+        if ($action === 'verify_credentials') {
         $email    = sanitize($_POST['email'] ?? '');
         $password = $_POST['password'] ?? '';
 
@@ -84,6 +84,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $error = 'Failed to resend code. Please try again.';
                 $step  = 'otp';
+            }
             }
         }
     }

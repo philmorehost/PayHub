@@ -618,10 +618,9 @@ function generate_and_send_otp($email, $purpose) {
            ->execute([$email, $purpose]);
 
         $otp = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        $expires_at = date('Y-m-d H:i:s', time() + 600); // 10 minutes
 
-        $stmt = $db->prepare("INSERT INTO otp_codes (email, otp_code, purpose, expires_at) VALUES (?, ?, ?, ?)");
-        $stmt->execute([$email, $otp, $purpose, $expires_at]);
+        $stmt = $db->prepare("INSERT INTO otp_codes (email, otp_code, purpose, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))");
+        $stmt->execute([$email, $otp, $purpose]);
 
         $site_name = getConfig('site_name', 'Payhub');
         $subject = "Your {$site_name} verification code";
