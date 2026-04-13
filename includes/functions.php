@@ -54,7 +54,7 @@ function ensure_critical_tables() {
     if (!isInstalled()) return;
 
     // Quick version check to avoid redundant DB calls on every request
-    $version = '1.1.1';
+    $version = '1.1.2';
     if (getConfig('sys_db_version') === $version) return;
 
     try {
@@ -74,7 +74,8 @@ function ensure_critical_tables() {
             'support_tickets' => "CREATE TABLE IF NOT EXISTS support_tickets (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, subject VARCHAR(255), message TEXT, status ENUM('open', 'closed') DEFAULT 'open', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'blog_posts' => "CREATE TABLE IF NOT EXISTS blog_posts (id INT AUTO_INCREMENT PRIMARY KEY, title VARCHAR(255), content TEXT, author VARCHAR(100), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'webhook_logs' => "CREATE TABLE IF NOT EXISTS webhook_logs (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, event_type VARCHAR(100), payload TEXT, response_code INT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
-            'staff_roles' => "CREATE TABLE IF NOT EXISTS staff_roles (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, role VARCHAR(50), permissions TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB"
+            'staff_roles' => "CREATE TABLE IF NOT EXISTS staff_roles (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, role VARCHAR(50), permissions TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
+            'otp_codes' => "CREATE TABLE IF NOT EXISTS otp_codes (id INT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(255) NOT NULL, otp_code VARCHAR(6) NOT NULL, purpose ENUM('registration','login') NOT NULL, expires_at DATETIME NOT NULL, used TINYINT DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_email_purpose (email, purpose)) ENGINE=InnoDB"
         ];
         foreach ($essential_tables as $sql) { $db->exec($sql); }
 
@@ -605,6 +606,63 @@ function resize_and_optimize_image($source_path, $target_path, $max_width = 1000
     return $res;
 }
 
+/**
+ * Generates a 6-digit OTP, stores it in the database, and sends it via email.
+ * Returns true on success, false on failure.
+ */
+function generate_and_send_otp($email, $purpose) {
+    try {
+        $db = Database::connect();
+        // Invalidate any previous unused OTPs for this email/purpose
+        $db->prepare("UPDATE otp_codes SET used = 1 WHERE email = ? AND purpose = ? AND used = 0")
+           ->execute([$email, $purpose]);
+
+        $otp = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $expires_at = date('Y-m-d H:i:s', time() + 600); // 10 minutes
+
+        $stmt = $db->prepare("INSERT INTO otp_codes (email, otp_code, purpose, expires_at) VALUES (?, ?, ?, ?)");
+        $stmt->execute([$email, $otp, $purpose, $expires_at]);
+
+        $site_name = getConfig('site_name', 'Payhub');
+        $subject = "Your {$site_name} verification code";
+        $label   = $purpose === 'registration' ? 'complete your registration' : 'log in to your account';
+        $body    = "
+            <h2 style='color:#1e293b;margin:0 0 12px'>Your verification code</h2>
+            <p style='color:#475569;margin:0 0 24px'>Use the code below to {$label}. It expires in 10 minutes.</p>
+            <div style='font-size:36px;font-weight:700;letter-spacing:10px;color:#4f46e5;background:#eef2ff;padding:20px 30px;border-radius:12px;text-align:center;margin:0 0 24px'>{$otp}</div>
+            <p style='color:#94a3b8;font-size:13px;margin:0'>If you did not request this code, you can safely ignore this email.</p>";
+
+        return sendEmail($email, $subject, $body);
+    } catch (\Throwable $e) {
+        error_log("generate_and_send_otp error [{$purpose}] for {$email}: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * Verifies an OTP for the given email and purpose.
+ * Returns true if valid, false otherwise. Marks OTP as used on success.
+ */
+function verify_otp($email, $otp, $purpose) {
+    try {
+        $db = Database::connect();
+        $stmt = $db->prepare(
+            "SELECT id FROM otp_codes
+             WHERE email = ? AND otp_code = ? AND purpose = ? AND used = 0 AND expires_at > NOW()
+             ORDER BY id DESC LIMIT 1"
+        );
+        $stmt->execute([$email, $otp, $purpose]);
+        $row = $stmt->fetch();
+        if ($row) {
+            $db->prepare("UPDATE otp_codes SET used = 1 WHERE id = ?")->execute([$row['id']]);
+            return true;
+        }
+        return false;
+    } catch (\Throwable $e) {
+        return false;
+    }
+}
+
 function sendEmail($to, $subject, $body) {
     $smtp_host = getConfig('smtp_host');
     $smtp_port = getConfig('smtp_port');
@@ -614,6 +672,11 @@ function sendEmail($to, $subject, $body) {
     $site_name = getConfig('site_name', 'Payhub');
     $logo = getConfig('site_logo');
 
+    // Use smtp_user as From address when smtp_from is not configured
+    if (empty($smtp_from)) {
+        $smtp_from = $smtp_user ?: ('noreply@' . ($_SERVER['HTTP_HOST'] ?? 'localhost'));
+    }
+
     if (!$smtp_host || !$smtp_user) {
         $logo_html = '';
         if ($logo) {
@@ -622,7 +685,11 @@ function sendEmail($to, $subject, $body) {
         }
         $headers = "MIME-Version: 1.0\r\nContent-type:text/html;charset=UTF-8\r\nFrom: $site_name <$smtp_from>\r\n";
         $full_body = "<div style='padding: 40px;'>$logo_html $body</div>";
-        return mail($to, $subject, $full_body, $headers);
+        $result = mail($to, $subject, $full_body, $headers);
+        if (!$result) {
+            error_log("sendEmail: PHP mail() failed sending to {$to}");
+        }
+        return $result;
     }
 
     $mail = new PHPMailer(true);
@@ -632,7 +699,12 @@ function sendEmail($to, $subject, $body) {
         $mail->SMTPAuth   = true;
         $mail->Username   = $smtp_user;
         $mail->Password   = $smtp_pass;
-        $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        // Auto-detect encryption: port 465 uses SMTPS (SSL), everything else uses STARTTLS
+        if ((int)$smtp_port === 465) {
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
+        } else {
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        }
         $mail->Port       = $smtp_port;
         $mail->setFrom($smtp_from, $site_name);
         $mail->addAddress($to);
@@ -642,6 +714,7 @@ function sendEmail($to, $subject, $body) {
         $mail->send();
         return true;
     } catch (Exception $e) {
+        error_log("sendEmail: PHPMailer error sending to {$to}: " . $e->getMessage());
         return false;
     }
 }

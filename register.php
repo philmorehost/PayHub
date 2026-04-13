@@ -6,39 +6,108 @@ if (isLoggedIn()) {
     redirect('merchant/dashboard.php');
 }
 
-$error = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $email = $_POST['email'] ?? '';
-    $password = $_POST['password'] ?? '';
-    $full_name = $_POST['full_name'] ?? '';
-    $business_name = $_POST['business_name'] ?? '';
+// Allow user to restart from step 1
+if (isset($_GET['clear_session'])) {
+    unset($_SESSION['pending_registration']);
+    redirect('register.php');
+}
 
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $error = 'Please enter a valid email address';
-    } elseif (strlen($password) < 6) {
-        $error = 'Password must be at least 6 characters';
-    } else {
-        $db = Database::connect();
-        $stmt = $db->prepare("SELECT id FROM users WHERE email = ?");
-        $stmt->execute([$email]);
-        if ($stmt->fetch()) {
-            $error = 'Email already registered';
+$error = '';
+$step = 'form'; // 'form' | 'otp'
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = $_POST['action'] ?? 'send_otp';
+
+    if ($action === 'send_otp') {
+        $email         = sanitize($_POST['email'] ?? '');
+        $password      = $_POST['password'] ?? '';
+        $full_name     = sanitize($_POST['full_name'] ?? '');
+        $business_name = sanitize($_POST['business_name'] ?? '');
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $error = 'Please enter a valid email address';
+        } elseif (strlen($password) < 6) {
+            $error = 'Password must be at least 6 characters';
+        } elseif (empty($full_name)) {
+            $error = 'Full name is required';
+        } elseif (empty($business_name)) {
+            $error = 'Business name is required';
         } else {
-            $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
-            $public_key = generateApiKey('pk_live_');
-            $secret_key = generateApiKey('sk_live_');
-            $test_pk = generateApiKey('pk_test_');
-            $test_sk = generateApiKey('sk_test_');
-            $stmt = $db->prepare("INSERT INTO users (email, password_hash, full_name, business_name, public_key, secret_key, test_public_key, test_secret_key, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'merchant')");
-            if ($stmt->execute([$email, $hashedPassword, $full_name, $business_name, $public_key, $secret_key, $test_pk, $test_sk])) {
-                // Auto-login or redirect to login
-                redirect('login.php?registered=1');
+            $db   = Database::connect();
+            $stmt = $db->prepare("SELECT id FROM users WHERE email = ?");
+            $stmt->execute([$email]);
+            if ($stmt->fetch()) {
+                $error = 'Email already registered';
             } else {
-                $error = 'Registration failed. Please try again.';
+                // Store pending registration in session
+                $_SESSION['pending_registration'] = [
+                    'email'         => $email,
+                    'password_hash' => password_hash($password, PASSWORD_DEFAULT),
+                    'full_name'     => $full_name,
+                    'business_name' => $business_name,
+                ];
+
+                if (generate_and_send_otp($email, 'registration')) {
+                    $step = 'otp';
+                } else {
+                    $error = 'Failed to send verification email. Please try again.';
+                    unset($_SESSION['pending_registration']);
+                }
+            }
+        }
+    } elseif ($action === 'verify_otp') {
+        $otp = trim($_POST['otp'] ?? '');
+
+        if (empty($_SESSION['pending_registration'])) {
+            $error = 'Session expired. Please start over.';
+        } else {
+            $pending = $_SESSION['pending_registration'];
+            $email   = $pending['email'];
+
+            if (verify_otp($email, $otp, 'registration')) {
+                $db         = Database::connect();
+                $public_key = generateApiKey('pk_live_');
+                $secret_key = generateApiKey('sk_live_');
+                $test_pk    = generateApiKey('pk_test_');
+                $test_sk    = generateApiKey('sk_test_');
+
+                $stmt = $db->prepare("INSERT INTO users (email, password_hash, full_name, business_name, public_key, secret_key, test_public_key, test_secret_key, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'merchant')");
+                if ($stmt->execute([$email, $pending['password_hash'], $pending['full_name'], $pending['business_name'], $public_key, $secret_key, $test_pk, $test_sk])) {
+                    unset($_SESSION['pending_registration']);
+                    redirect('login.php?registered=1');
+                } else {
+                    $error = 'Registration failed. Please try again.';
+                    $step  = 'otp';
+                }
+            } else {
+                $error = 'Invalid or expired verification code. Please try again.';
+                $step  = 'otp';
+            }
+        }
+    } elseif ($action === 'resend_otp') {
+        if (empty($_SESSION['pending_registration'])) {
+            $error = 'Session expired. Please start over.';
+        } else {
+            $email = $_SESSION['pending_registration']['email'];
+            if (generate_and_send_otp($email, 'registration')) {
+                $step = 'otp';
+            } else {
+                $error = 'Failed to resend code. Please try again.';
+                $step  = 'otp';
             }
         }
     }
+} elseif (isset($_SESSION['pending_registration'])) {
+    // Resume OTP step if user navigates back
+    $step = 'otp';
 }
+
+// Guard: if we somehow reach the OTP step without session data, fall back to form
+if ($step === 'otp' && empty($_SESSION['pending_registration'])) {
+    $step = 'form';
+}
+
+$pending_email = htmlspecialchars($_SESSION['pending_registration']['email'] ?? '');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -61,31 +130,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <a href="index.php" class="inline-flex items-center gap-2 mb-8">
                     <?php $logo = getConfig('site_logo'); ?>
                     <?php if ($logo): ?>
-                        <img src="<?php echo BASE_URL; ?>uploads/<?php echo $logo; ?>" alt="Logo" class="h-12 object-contain">
+                        <img src="<?php echo BASE_URL; ?>uploads/<?php echo htmlspecialchars($logo); ?>" alt="Logo" class="h-12 object-contain">
                     <?php else: ?>
                         <div class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center">
                             <i data-lucide="credit-card" class="text-white w-6 h-6"></i>
                         </div>
                     <?php endif; ?>
-                    <span class="text-2xl font-bold tracking-tight text-slate-900"><?php echo getConfig('site_name', 'Payhub'); ?></span>
+                    <span class="text-2xl font-bold tracking-tight text-slate-900"><?php echo htmlspecialchars(getConfig('site_name', 'Payhub')); ?></span>
                 </a>
-                <h1 class="text-3xl font-bold text-slate-900">Create your account</h1>
-                <p class="text-slate-500 mt-2">Start accepting payments in minutes.</p>
+                <?php if ($step === 'otp'): ?>
+                    <h1 class="text-3xl font-bold text-slate-900">Verify your email</h1>
+                    <p class="text-slate-500 mt-2">Enter the 6-digit code sent to <strong><?php echo $pending_email; ?></strong>.</p>
+                <?php else: ?>
+                    <h1 class="text-3xl font-bold text-slate-900">Create your account</h1>
+                    <p class="text-slate-500 mt-2">Start accepting payments in minutes.</p>
+                <?php endif; ?>
             </div>
 
             <div class="bg-white p-8 rounded-[2rem] shadow-xl shadow-slate-200/50 border border-slate-100">
                 <?php if ($error): ?>
                     <div class="mb-6 p-4 bg-red-50 text-red-600 rounded-2xl text-sm font-medium border border-red-100">
-                        <?php echo $error; ?>
+                        <?php echo htmlspecialchars($error); ?>
                     </div>
                 <?php endif; ?>
-                
+
+                <?php if ($step === 'otp'): ?>
+                <!-- Step 2: OTP Verification -->
                 <form method="POST" class="space-y-5">
+                    <input type="hidden" name="action" value="verify_otp">
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700 mb-2">Verification Code</label>
+                        <input
+                            type="text"
+                            name="otp"
+                            required
+                            maxlength="6"
+                            pattern="\d{6}"
+                            autofocus
+                            class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-center text-2xl tracking-[0.5em] font-bold"
+                            placeholder="000000"
+                        >
+                    </div>
+
+                    <button
+                        type="submit"
+                        class="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
+                    >
+                        Verify &amp; Create Account <i class="lucide-arrow-right w-5 h-5"></i>
+                    </button>
+                </form>
+
+                <div class="mt-6 text-center">
+                    <form method="POST" class="inline">
+                        <input type="hidden" name="action" value="resend_otp">
+                        <button type="submit" class="text-sm text-indigo-600 font-bold hover:text-indigo-700">
+                            Resend code
+                        </button>
+                    </form>
+                    <span class="text-slate-300 mx-2">|</span>
+                    <a href="register.php?clear_session=1" class="text-sm text-slate-500 hover:text-slate-700">Start over</a>
+                </div>
+
+                <?php else: ?>
+                <!-- Step 1: Registration Form -->
+                <form method="POST" class="space-y-5">
+                    <input type="hidden" name="action" value="send_otp">
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-sm font-bold text-slate-700 mb-2">Full Name</label>
-                            <input 
-                                type="text" 
+                            <input
+                                type="text"
                                 name="full_name"
                                 required
                                 class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
@@ -94,8 +208,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                         <div>
                             <label class="block text-sm font-bold text-slate-700 mb-2">Business Name</label>
-                            <input 
-                                type="text" 
+                            <input
+                                type="text"
                                 name="business_name"
                                 required
                                 class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
@@ -105,8 +219,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-700 mb-2">Email Address</label>
-                        <input 
-                            type="email" 
+                        <input
+                            type="email"
                             name="email"
                             required
                             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
@@ -115,8 +229,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-700 mb-2">Password</label>
-                        <input 
-                            type="password" 
+                        <input
+                            type="password"
                             name="password"
                             required
                             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
@@ -131,13 +245,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </p>
                     </div>
 
-                    <button 
-                        type="submit" 
+                    <button
+                        type="submit"
                         class="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
                     >
-                        Create Account <i class="lucide-arrow-right w-5 h-5"></i>
+                        Continue <i class="lucide-arrow-right w-5 h-5"></i>
                     </button>
                 </form>
+                <?php endif; ?>
 
                 <div class="mt-8 pt-8 border-t border-slate-100 text-center">
                     <p class="text-slate-500">
@@ -154,7 +269,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-white rounded-full blur-[120px]"></div>
             <div class="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-white rounded-full blur-[120px]"></div>
         </div>
-        
+
         <div class="max-w-md relative z-10">
             <h2 class="text-4xl font-bold text-white mb-12 leading-tight">Join thousands of businesses growing with Payhub</h2>
             <div class="space-y-8 text-white">
@@ -188,5 +303,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         </div>
     </div>
+
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>lucide.createIcons();</script>
 </body>
 </html>
+
