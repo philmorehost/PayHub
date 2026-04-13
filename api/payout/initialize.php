@@ -82,9 +82,19 @@ if ($amount < $min_payout) {
     exit;
 }
 
-if ($amount > $user['wallet_balance']) {
+// Calculate available balance by deducting pending payouts
+$stmt = $db->prepare("SELECT SUM(amount) as pending_sum FROM payouts WHERE user_id = ? AND status = 'pending'");
+$stmt->execute([$user['id']]);
+$pending_payouts = (float)$stmt->fetch()['pending_sum'];
+$available_balance = $user['wallet_balance'] - $pending_payouts;
+
+if ($amount > $available_balance) {
     http_response_code(400);
-    echo json_encode(['status' => false, 'message' => 'Insufficient wallet balance']);
+    echo json_encode([
+        'status' => false,
+        'message' => 'Insufficient available balance. ' .
+                     ($pending_payouts > 0 ? "You have " . formatCurrency($pending_payouts) . " in pending payout requests." : "")
+    ]);
     exit;
 }
 
@@ -144,6 +154,17 @@ try {
     }
 
     $db->commit();
+
+    // Activity Notification
+    sendEmail($user['email'], "Payout Requested", "
+        <p>A new payout request has been initiated via API.</p>
+        <ul>
+            <li><strong>Amount:</strong> " . formatCurrency($amount) . "</li>
+            <li><strong>Status:</strong> " . ($needs_review ? 'Queued for Review' : 'Processed') . "</li>
+            <li><strong>Bank:</strong> $target_bank_name</li>
+            <li><strong>Account:</strong> $target_account_number</li>
+        </ul>
+    ");
 
     echo json_encode([
         'status' => true,

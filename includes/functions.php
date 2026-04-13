@@ -54,7 +54,7 @@ function ensure_critical_tables() {
     if (!isInstalled()) return;
 
     // Quick version check to avoid redundant DB calls on every request
-    $version = '1.1.3';
+    $version = '1.1.4';
     if (getConfig('sys_db_version') === $version) return;
 
     try {
@@ -121,7 +121,10 @@ function ensure_critical_tables() {
                 'id_expiry_date' => "DATE",
                 'bvn' => "VARCHAR(20)",
                 'residential_address' => "TEXT",
-                'rc_number' => "VARCHAR(100)"
+                'rc_number' => "VARCHAR(100)",
+                'two_factor_secret' => "VARCHAR(255)",
+                'two_factor_enabled' => "TINYINT DEFAULT 0",
+                'security_pin' => "VARCHAR(255)"
             ],
             'transactions' => [
                 'customer_email' => "VARCHAR(255)",
@@ -682,15 +685,37 @@ function sendEmail($to, $subject, $body) {
         $smtp_from = $smtp_user ?: ('noreply@' . ($_SERVER['HTTP_HOST'] ?? 'localhost'));
     }
 
+    $logo_html = '';
+    if ($logo) {
+        $logo_url = BASE_URL . 'uploads/' . $logo;
+        $logo_html = "<img src='$logo_url' alt='$site_name' style='height: 40px; margin-bottom: 20px;'>";
+    }
+
+    $modern_body = "
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset='UTF-8'>
+        <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    </head>
+    <body style='margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f7fa; color: #334155;'>
+        <div style='max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 24px; overflow: hidden; shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); border: 1px solid #e2e8f0;'>
+            <div style='padding: 40px;'>
+                $logo_html
+                <div style='font-size: 16px; line-height: 1.6;'>
+                    $body
+                </div>
+                <div style='margin-top: 40px; padding-top: 24px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #94a3b8; text-align: center;'>
+                    &copy; " . date('Y') . " $site_name. All rights reserved.
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>";
+
     if (!$smtp_host || !$smtp_user) {
-        $logo_html = '';
-        if ($logo) {
-            $logo_url = BASE_URL . 'uploads/' . $logo;
-            $logo_html = "<div style='text-align: center; margin-bottom: 20px;'><img src='$logo_url' alt='$site_name' style='height: 60px; width: auto; max-width: 200px;'></div>";
-        }
         $headers = "MIME-Version: 1.0\r\nContent-type:text/html;charset=UTF-8\r\nFrom: $site_name <$smtp_from>\r\n";
-        $full_body = "<div style='padding: 40px;'>$logo_html $body</div>";
-        $result = mail($to, $subject, $full_body, $headers);
+        $result = mail($to, $subject, $modern_body, $headers);
         if (!$result) {
             $last_error = error_get_last();
             error_log("sendEmail: PHP mail() failed sending to {$to}. Error: " . ($last_error['message'] ?? 'Unknown error'));
@@ -705,7 +730,6 @@ function sendEmail($to, $subject, $body) {
         $mail->SMTPAuth   = true;
         $mail->Username   = $smtp_user;
         $mail->Password   = $smtp_pass;
-        // Auto-detect encryption: port 465 uses SMTPS (SSL), everything else uses STARTTLS
         if ((int)$smtp_port === 465) {
             $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
         } else {
@@ -716,7 +740,7 @@ function sendEmail($to, $subject, $body) {
         $mail->addAddress($to);
         $mail->isHTML(true);
         $mail->Subject = $subject;
-        $mail->Body    = "<div style='background-color: #f9fafb; padding: 40px 0; font-family: sans-serif;'><div style='max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; padding: 40px;'>$body</div></div>";
+        $mail->Body    = $modern_body;
         $mail->send();
         return true;
     } catch (Exception $e) {

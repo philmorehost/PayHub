@@ -65,6 +65,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 unset($_SESSION['pending_login_user_id'], $_SESSION['pending_login_role'], $_SESSION['pending_login_email']);
 
                 if ($_SESSION['role'] === 'admin') {
+                    sendEmail($email, "New Admin Login Alert", "<p>A new login was detected on your admin account at " . date('Y-m-d H:i:s') . ". If this wasn't you, please secure your account.</p>");
                     redirect('admin/index.php');
                 } else {
                     redirect('merchant/dashboard.php');

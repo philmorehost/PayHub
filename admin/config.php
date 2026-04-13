@@ -18,6 +18,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $stmt = $db->prepare("INSERT INTO config (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)");
         $stmt->execute([$key, $value]);
         $success_msg = "Configuration updated: $key";
+
+        // Activity Notification
+        sendEmail($user['email'], "System Config Changed: $key", "<p>The system configuration for <strong>$key</strong> has been updated to: <code>$value</code></p><p>Changed by: {$user['email']}</p>");
         // Flush migration cache if key is sys_db_version
         if ($key === 'sys_db_version') {
             ensure_critical_tables();

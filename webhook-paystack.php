@@ -18,6 +18,16 @@ if (!$event) {
     die('No input');
 }
 
+// Verify Paystack IP Address
+$paystack_ips = ['52.31.139.75', '52.49.173.169', '52.214.14.220'];
+$request_ip = $_SERVER['REMOTE_ADDR'] ?? '';
+
+if (!in_array($request_ip, $paystack_ips) && getConfig('webhook_ip_check', '0') === '1') {
+    file_put_contents('webhook_debug.log', "IP Verification Failed: " . $request_ip . PHP_EOL, FILE_APPEND);
+    http_response_code(403);
+    die('Unauthorized IP address');
+}
+
 // Verify Paystack Signature
 $paystack_secret = getConfig('paystack_secret_key');
 $signature = $_SERVER['HTTP_X_PAYSTACK_SIGNATURE'] ?? '';

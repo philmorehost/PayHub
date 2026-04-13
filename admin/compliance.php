@@ -15,6 +15,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $merchantId = (int)$_POST['merchant_id'];
         $status = (int)$_POST['status'];
         $notes = sanitize($_POST['notes']);
+        $pin = $_POST['security_pin'] ?? '';
+
+        if (empty($user['security_pin'])) {
+            $error_msg = "Security PIN not set. Please set it in Security Settings.";
+        } elseif (!password_verify($pin, $user['security_pin'])) {
+            $error_msg = "Invalid Security PIN.";
+        } else {
 
         $db->beginTransaction();
         try {
@@ -61,6 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($db->inTransaction()) $db->rollBack();
             error_log("KYC Processing Crash (ID: $merchantId): " . $e->getMessage());
             $error_msg = "Critical error during processing: " . $e->getMessage();
+        }
         }
     }
 }
@@ -309,6 +317,10 @@ include '../includes/dashboard-head.php';
                         <input type="hidden" name="merchant_id" :value="merchant.id">
                         <input type="hidden" name="status" id="kycStatus">
                         <div class="flex flex-col md:flex-row gap-6 items-end">
+                            <div class="w-full md:w-32">
+                                <label class="block text-[10px] font-bold text-slate-400 uppercase mb-2 tracking-widest">Security PIN</label>
+                                <input type="password" name="security_pin" maxlength="4" pattern="\d{4}" required placeholder="0000" class="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 outline-none text-center text-lg font-bold tracking-widest">
+                            </div>
                             <div class="flex-1 w-full">
                                 <label class="block text-[10px] font-bold text-slate-400 uppercase mb-2 tracking-widest">Admin Decision Notes</label>
                                 <textarea name="notes" placeholder="Enter rejection reason or approval notes..." class="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 outline-none h-20 text-sm"></textarea>
