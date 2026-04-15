@@ -467,6 +467,38 @@ function paystack_payout($userId, $amount, $reason = "Merchant Payout", $customB
     return $transfer;
 }
 
+/**
+ * Calculates the payout fee based on tiered structure and stamp duty rules.
+ */
+function calculate_payout_fee($amount) {
+    // 1. Determine the Base Transfer Fee
+    $tier1_max = (float)getConfig('payout_tier1_max', '5000');
+    $tier1_fee = (float)getConfig('payout_tier1_fee', '10');
+
+    $tier2_max = (float)getConfig('payout_tier2_max', '50000');
+    $tier2_fee = (float)getConfig('payout_tier2_fee', '25');
+
+    $tier3_fee = (float)getConfig('payout_tier3_fee', '50');
+
+    if ($amount <= $tier1_max) {
+        $transferFee = $tier1_fee;
+    } elseif ($amount <= $tier2_max) {
+        $transferFee = $tier2_fee;
+    } else {
+        $transferFee = $tier3_fee;
+    }
+
+    // 2. Add Government Stamp Duty (Tax Act 2025)
+    $stamp_threshold = (float)getConfig('stamp_duty_threshold', '10000');
+    $stamp_fee = (float)getConfig('stamp_duty_fee', '50');
+    $stampDuty = ($amount >= $stamp_threshold) ? $stamp_fee : 0;
+
+    // 3. Add PayHub's "Markup" for profit
+    $payhubMargin = (float)getConfig('payout_markup', '0');
+
+    return $transferFee + $stampDuty + $payhubMargin;
+}
+
 function calculate_fees($amount, $is_international = false, $userId = null) {
     $percent = null;
     $flat = null;

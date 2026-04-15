@@ -9,7 +9,7 @@ if (isLoggedIn()) {
 
 // Allow clearing the pending login state
 if (isset($_GET['clear_session'])) {
-    unset($_SESSION['pending_login_user_id'], $_SESSION['pending_login_role'], $_SESSION['pending_login_email'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_role']);
+    unset($_SESSION['pending_login_user_id'], $_SESSION['pending_login_role'], $_SESSION['pending_login_email'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_role'], $_SESSION['pending_2fa_email']);
     redirect('login.php');
 }
 
@@ -103,7 +103,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 require_once 'vendor/autoload.php';
                 $gauth = new \Sonata\GoogleAuthenticator\GoogleAuthenticator();
 
-                if ($gauth->checkCode($user['two_factor_secret'], $code)) {
+
+            $pin = $_POST['security_pin'] ?? '';
+            if (!password_verify($pin, $user['security_pin'])) {
+                $error = 'Invalid Security PIN.';
+                $step = '2fa';
+            } elseif ($gauth->checkCode($user['two_factor_secret'], $code)) {
                     session_regenerate_id(true);
                     $_SESSION['user_id'] = $_SESSION['pending_2fa_user_id'];
                     $_SESSION['role']    = $_SESSION['pending_2fa_role'];
@@ -198,6 +203,16 @@ $pending_email = htmlspecialchars($_SESSION['pending_login_email'] ?? $_SESSION[
                 <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                 <input type="hidden" name="action" value="verify_2fa">
                 <div>
+                    <label class="block text-sm font-bold text-slate-700 mb-2">Security PIN</label>
+                    <input
+                        type="password"
+                        name="security_pin"
+                        required
+                        maxlength="4"
+                        pattern="\d{4}"
+                        class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-center text-2xl tracking-[0.5em] font-bold mb-4"
+                        placeholder="0000"
+                    >
                     <label class="block text-sm font-bold text-slate-700 mb-2">Authenticator Code</label>
                     <input
                         type="text"

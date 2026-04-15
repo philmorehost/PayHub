@@ -22,104 +22,123 @@ $stmt->execute([$user['id']]);
 $daily_count = $stmt->fetch()['daily_count'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    if ($_POST['action'] === 'submit_consent') {
-        $stmt = $db->prepare("UPDATE users SET has_payout_consent = 1, payout_consent_date = CURRENT_TIMESTAMP WHERE id = ?");
-        $stmt->execute([$user['id']]);
-        $success_msg = "Manual payout consent recorded. You can now request payouts.";
-        $user = getAuthUser();
-    } elseif ($_POST['action'] === 'request_payout') {
-        // Check for Global Payout Service Status
-        if (!$payoutServiceEnabled) {
-            $error_msg = "The payout service is currently unavailable. Please try again later.";
-            goto skip_payout;
-        }
-
-        // Check for Test Mode
-        if ($user['is_test_mode']) {
-            $error_msg = "Payouts are not available in Test Mode. Please switch to Live Mode to withdraw real funds.";
-            goto skip_payout;
-        }
-
-        // Check for pending payout switch
-        if ($user['payout_method_status'] === 'pending_switch') {
-            $error_msg = "Your payout requests are currently on hold pending admin review of your payout method change.";
-            goto skip_payout;
-        }
-
-        // Check for global disable vs individual consent
-        if (!$manualPayoutGlobalEnabled && !$user['has_payout_consent']) {
-            $error_msg = "Manual payouts are currently disabled by the admin. Please sign the consent form to proceed.";
-            goto skip_payout;
-        }
-
-    // Check for suspension
-    if ($user['is_suspended']) {
-        $error_msg = "Your account is suspended. Payout requests are disabled.";
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error_msg = "Invalid security token.";
     } else {
-        if ($daily_count >= $max_daily) {
-            $error_msg = "You have reached the 24-hour limit of $max_daily manual payout request(s) set by the administrator.";
+        if ($_POST['action'] === 'submit_consent') {
+            $stmt = $db->prepare("UPDATE users SET has_payout_consent = 1, payout_consent_date = CURRENT_TIMESTAMP WHERE id = ?");
+            $stmt->execute([$user['id']]);
+            $success_msg = "Manual payout consent recorded. You can now request payouts.";
+            $user = getAuthUser();
+        } elseif ($_POST['action'] === 'request_payout') {
+            // Check for Global Payout Service Status
+            if (!$payoutServiceEnabled) {
+                $error_msg = "The payout service is currently unavailable. Please try again later.";
+                goto skip_payout;
+            }
 
-            // Trigger notifications
-            $admin_email = getConfig('smtp_user');
-            $site_name = getConfig('site_name', 'Payhub');
+            // Check for Test Mode
+            if ($user['is_test_mode']) {
+                $error_msg = "Payouts are not available in Test Mode. Please switch to Live Mode to withdraw real funds.";
+                goto skip_payout;
+            }
 
-            // Notification to Merchant
-            sendEmail($user['email'], "Payout Limit Reached - $site_name", "
-                <h2 style='color: #ef4444;'>24-Hour Payout Limit Hit</h2>
-                <p>Hello {$user['business_name']},</p>
-                <p>You have reached the maximum number of manual payout requests allowed within a 24-hour period ($max_daily).</p>
-                <p>Please wait for the automated settlement or try again later.</p>
-            ");
+            // Check for pending payout switch
+            if ($user['payout_method_status'] === 'pending_switch') {
+                $error_msg = "Your payout requests are currently on hold pending admin review of your payout method change.";
+                goto skip_payout;
+            }
 
-            // Notification to Admin
-            sendEmail($admin_email, "Merchant Payout Limit Hit: {$user['business_name']}", "
-                <h2>Merchant Alert</h2>
-                <p><strong>Merchant:</strong> {$user['business_name']} ({$user['email']})</p>
-                <p>This merchant has hit their manual payout limit of <strong>$max_daily</strong> requests within 24 hours.</p>
-                <p>Time: " . date('Y-m-d H:i:s') . "</p>
-            ");
-        } else {
-            $amount = (float)$_POST['amount'];
-            $min_payout = (float)getConfig('min_payout_amount', '1000');
+            // Check for global disable vs individual consent
+            if (!$manualPayoutGlobalEnabled && !$user['has_payout_consent']) {
+                $error_msg = "Manual payouts are currently disabled by the admin. Please sign the consent form to proceed.";
+                goto skip_payout;
+            }
 
-            if ($amount < $min_payout) {
-                $error_msg = "Minimum payout amount is " . formatCurrency($min_payout);
-            } elseif ($amount > $user['wallet_balance']) {
-                $error_msg = "Insufficient wallet balance.";
-            } elseif ($amount > 0) {
-                if ($user['settlement_bank'] && $user['settlement_account_number']) {
-                    $fee = (float)getConfig('manual_payout_fee', '0');
-                    $net = $amount - $fee;
+            // Check for suspension
+            if ($user['is_suspended']) {
+                $error_msg = "Your account is suspended. Payout requests are disabled.";
+            } else {
+                if ($daily_count >= $max_daily) {
+                    $error_msg = "You have reached the 24-hour limit of $max_daily manual payout request(s) set by the administrator.";
 
-                    if ($net <= 0) {
-                        $error_msg = "Amount after fees must be greater than zero.";
+                    // Trigger notifications
+                    $admin_email = getConfig('smtp_user');
+                    $site_name = getConfig('site_name', 'Payhub');
+
+                    sendEmail($user['email'], "Payout Limit Reached - $site_name", "
+                        <h2 style='color: #ef4444;'>24-Hour Payout Limit Hit</h2>
+                        <p>Hello {$user['business_name']},</p>
+                        <p>You have reached the maximum number of manual payout requests allowed within a 24-hour period ($max_daily).</p>
+                        <p>Please wait for the automated settlement or try again later.</p>
+                    ");
+
+                    sendEmail($admin_email, "Merchant Payout Limit Hit: {$user['business_name']}", "
+                        <h2>Merchant Alert</h2>
+                        <p><strong>Merchant:</strong> {$user['business_name']} ({$user['email']})</p>
+                        <p>This merchant has hit their manual payout limit of <strong>$max_daily</strong> requests within 24 hours.</p>
+                        <p>Time: " . date('Y-m-d H:i:s') . "</p>
+                    ");
+                } else {
+                    $amount = (float)$_POST['amount'];
+                    $min_payout = (float)getConfig('min_payout_amount', '1000');
+
+                    if ($amount < $min_payout) {
+                        $error_msg = "Minimum payout amount is " . formatCurrency($min_payout);
                     } else {
-                        $db->beginTransaction();
-                        try {
-                            // Create payout record
-                            $stmt = $db->prepare("INSERT INTO payouts (user_id, amount, fee_amount, net_amount, bank_name, account_number, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')");
-                            $stmt->execute([$user['id'], $amount, $fee, $net, $user['settlement_bank'], $user['settlement_account_number']]);
+                        // Calculate available balance by deducting pending payouts
+                        $stmt = $db->prepare("SELECT SUM(amount) as pending_sum FROM payouts WHERE user_id = ? AND status = 'pending'");
+                        $stmt->execute([$user['id']]);
+                        $pending_payouts = (float)$stmt->fetch()['pending_sum'];
+                        $available_balance = $user['wallet_balance'] - $pending_payouts;
 
-                            // Log ledger entry (this also deducts the balance)
-                            log_ledger_entry($user['id'], $amount, 'debit', 'payout', "Payout request (Net: ".formatCurrency($net).") to " . $user['settlement_bank']);
+                        if ($amount > $available_balance) {
+                            $error_msg = "Insufficient available balance. " . ($pending_payouts > 0 ? "You have " . formatCurrency($pending_payouts) . " in pending payout requests." : "");
+                        } elseif ($amount > 0) {
+                            if ($user['settlement_bank'] && $user['settlement_account_number']) {
+                                $fee = calculate_payout_fee($amount);
+                                $net = $amount - $fee;
 
-                            $db->commit();
-                            $success_msg = "Payout request submitted successfully.";
-                            $user = getAuthUser(); // Refresh user data
-                        } catch (Exception $e) {
-                            $db->rollBack();
-                            $error_msg = "Payout failed: " . $e->getMessage();
+                                if ($net <= 0) {
+                                    $error_msg = "Amount after fees must be greater than zero.";
+                                } else {
+                                    $db->beginTransaction();
+                                    try {
+                                        $stmt = $db->prepare("INSERT INTO payouts (user_id, amount, fee_amount, net_amount, bank_name, account_number, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')");
+                                        $stmt->execute([$user['id'], $amount, $fee, $net, $user['settlement_bank'], $user['settlement_account_number']]);
+
+                                        log_ledger_entry($user['id'], $amount, 'debit', 'payout', "Payout request (Net: ".formatCurrency($net).") to " . $user['settlement_bank']);
+
+                                        $db->commit();
+                                        $success_msg = "Payout request submitted successfully.";
+
+                                        // Activity Notification
+                                        sendEmail($user['email'], "Payout Requested", "
+                                            <p>A new payout request has been submitted from your dashboard.</p>
+                                            <ul>
+                                                <li><strong>Amount:</strong> " . formatCurrency($amount) . "</li>
+                                                <li><strong>Fee:</strong> " . formatCurrency($fee) . "</li>
+                                                <li><strong>Net Amount:</strong> " . formatCurrency($net) . "</li>
+                                                <li><strong>Bank:</strong> " . $user['settlement_bank'] . "</li>
+                                                <li><strong>Account:</strong> " . $user['settlement_account_number'] . "</li>
+                                            </ul>
+                                        ");
+                                        $user = getAuthUser();
+                                        $daily_count++;
+                                    } catch (Exception $e) {
+                                        $db->rollBack();
+                                        $error_msg = "Transaction failed: " . $e->getMessage();
+                                    }
+                                }
+                            } else {
+                                $error_msg = "Please set up your settlement bank details in settings first.";
+                            }
                         }
                     }
-                } else {
-                    $error_msg = "Please set up your settlement bank details in settings first.";
                 }
-            } else {
-                $error_msg = "Invalid amount or insufficient balance.";
             }
         }
     }
-}
 }
 
 skip_payout:
@@ -131,20 +150,20 @@ include '../includes/dashboard-head.php';
 ?>
 <body class="bg-slate-50 text-slate-900 flex h-screen overflow-hidden" x-data>
     <?php include '../includes/sidebar.php'; ?>
-
     <main class="flex-1 flex flex-col min-w-0 overflow-hidden">
         <?php include '../includes/topbar.php'; ?>
         <div class="flex-1 overflow-y-auto p-4 sm:p-8">
-        <div class="max-w-6xl mx-auto">
-            <h1 class="text-2xl sm:text-3xl font-bold text-slate-900 mb-8">Payouts</h1>
 
             <?php if ($success_msg): ?>
-                <div class="mb-6 p-4 bg-emerald-50 text-emerald-700 rounded-2xl border border-emerald-100 font-medium">
+                <div class="mb-6 p-4 bg-emerald-50 text-emerald-700 rounded-2xl border border-emerald-100 font-medium flex items-center gap-3">
+                    <i data-lucide="check-circle" class="w-5 h-5"></i>
                     <?php echo $success_msg; ?>
                 </div>
             <?php endif; ?>
+
             <?php if ($error_msg): ?>
-                <div class="mb-6 p-4 bg-red-50 text-red-700 rounded-2xl border border-red-100 font-medium">
+                <div class="mb-6 p-4 bg-rose-50 text-rose-700 rounded-2xl border border-rose-100 font-medium flex items-center gap-3">
+                    <i data-lucide="alert-circle" class="w-5 h-5"></i>
                     <?php echo $error_msg; ?>
                 </div>
             <?php endif; ?>
@@ -179,10 +198,11 @@ include '../includes/dashboard-head.php';
                                 </div>
                                 <div class="flex gap-3">
                                     <i data-lucide="check-circle-2" class="w-4 h-4 text-amber-500 shrink-0 mt-1"></i>
-                                    <p class="text-xs text-slate-600">I understand that manual payouts are limited to <?php echo getConfig('max_manual_payouts_limit', '1'); ?> request(s) every 24 hours.</p>
+                                    <p class="text-xs text-slate-600">I understand that manual payouts are limited to <?php echo $max_daily; ?> request(s) every 24 hours.</p>
                                 </div>
                             </div>
                             <form method="POST">
+                                <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                                 <input type="hidden" name="action" value="submit_consent">
                                 <button type="submit" class="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold shadow-lg hover:bg-slate-800 transition-all flex items-center justify-center gap-2">
                                     I Agree & Consent
@@ -197,10 +217,10 @@ include '../includes/dashboard-head.php';
                             <p class="text-xs text-indigo-600 uppercase font-bold mb-1 tracking-widest">Available Balance</p>
                             <p class="text-3xl font-bold text-indigo-700 tracking-tight"><?php echo formatCurrency($user['wallet_balance']); ?></p>
                         </div>
-                        
-                        <div class="mb-6 p-6 bg-slate-50 rounded-3xl border border-slate-100 relative overflow-hidden group">
-                            <div class="flex items-center justify-between mb-2">
-                                <p class="text-[10px] text-slate-400 uppercase font-bold tracking-widest">24h Limit Status</p>
+
+                        <div class="mb-8 p-6 bg-slate-50 rounded-3xl border border-slate-100">
+                            <div class="flex justify-between items-center mb-4">
+                                <p class="text-[10px] text-slate-400 uppercase font-bold tracking-widest">Daily Limit</p>
                                 <div class="w-8 h-8 <?php echo $daily_count >= $max_daily ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-600'; ?> rounded-xl flex items-center justify-center transition-colors">
                                     <i data-lucide="send" class="w-4 h-4"></i>
                                 </div>
@@ -241,8 +261,27 @@ include '../includes/dashboard-head.php';
                             <?php endif; ?>
                         </div>
 
-                        <form method="POST" class="space-y-6">
+                        <form method="POST" class="space-y-6" x-data="{
+                            amount: 0,
+                            get fee() {
+                                if (this.amount <= 0) return 0;
+                                let a = parseFloat(this.amount);
+                                let t1_max = <?php echo getConfig('payout_tier1_max', '5000'); ?>;
+                                let t1_fee = <?php echo getConfig('payout_tier1_fee', '10'); ?>;
+                                let t2_max = <?php echo getConfig('payout_tier2_max', '50000'); ?>;
+                                let t2_fee = <?php echo getConfig('payout_tier2_fee', '25'); ?>;
+                                let t3_fee = <?php echo getConfig('payout_tier3_fee', '50'); ?>;
+                                let s_threshold = <?php echo getConfig('stamp_duty_threshold', '10000'); ?>;
+                                let s_fee = <?php echo getConfig('stamp_duty_fee', '50'); ?>;
+                                let markup = <?php echo getConfig('payout_markup', '5'); ?>;
+
+                                let transferFee = (a <= t1_max) ? t1_fee : (a <= t2_max ? t2_fee : t3_fee);
+                                let stampDuty = (a >= s_threshold) ? s_fee : 0;
+                                return transferFee + stampDuty + markup;
+                            }
+                        }">
                             <input type="hidden" name="action" value="request_payout">
+                            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                             <div>
                                 <label class="block text-sm font-bold text-slate-700 mb-2">Amount to Withdraw</label>
                                 <div class="relative">
@@ -252,11 +291,25 @@ include '../includes/dashboard-head.php';
                                         name="amount"
                                         required
                                         step="0.01"
+                                        x-model="amount"
                                         class="w-full pl-8 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-bold text-slate-900" 
                                         placeholder="0.00" 
                                     >
                                 </div>
                             </div>
+
+                            <div class='p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-2' x-show='amount > 0'>
+                                <div class='flex justify-between text-xs'>
+                                    <span class='text-slate-500'>Transaction Fee & Stamp Duty</span>
+                                    <span class='font-bold text-slate-700'>₦<span x-text='fee.toFixed(2)'></span></span>
+                                </div>
+                                <div class='flex justify-between text-sm pt-2 border-t border-slate-200'>
+                                    <span class='font-bold text-slate-900'>Total Deduction</span>
+                                    <span class='font-bold text-indigo-600'>₦<span x-text='(parseFloat(amount) + fee).toFixed(2)'></span></span>
+                                </div>
+                                <p class='text-[10px] text-slate-400 leading-tight'>Fees are inclusive of NIBSS charges and statutory Stamp Duty where applicable.</p>
+                            </div>
+
                             <button 
                                 type="submit" 
                                 <?php echo (!$payoutServiceEnabled || !$user['settlement_bank'] || $user['is_suspended'] || $user['payout_method_status'] === 'pending_switch' || $user['is_test_mode'] || $daily_count >= $max_daily) ? 'disabled' : ''; ?>
@@ -315,7 +368,7 @@ include '../includes/dashboard-head.php';
                                 <?php endforeach; ?>
                                 <?php if (empty($payouts)): ?>
                                     <tr>
-                                        <td colspan="4" class="px-8 py-16 text-center text-slate-400 italic">No payout history found.</td>
+                                        <td colspan="5" class="px-8 py-16 text-center text-slate-400 italic">No payout history found.</td>
                                     </tr>
                                 <?php endif; ?>
                             </tbody>

@@ -117,7 +117,7 @@ if ($daily_count >= $max_daily) {
 }
 
 // 5. Execution Logic
-$fee = (float)getConfig('manual_payout_fee', '0');
+$fee = calculate_payout_fee($amount);
 $net = $amount - $fee;
 
 if ($net <= 0) {
