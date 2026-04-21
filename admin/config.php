@@ -108,6 +108,7 @@ include '../includes/dashboard-head.php';
                         </div>
                         <?php $globalPayoutReview = getConfig('global_payout_review') === '1'; ?>
                         <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                             <input type="hidden" name="action" value="update_config">
                             <input type="hidden" name="key" value="global_payout_review">
                             <input type="hidden" name="value" value="<?php echo $globalPayoutReview ? '0' : '1'; ?>">
@@ -124,6 +125,7 @@ include '../includes/dashboard-head.php';
                         </div>
                         <?php $manualPayoutEnabled = getConfig('manual_payout_enabled', '1') === '1'; ?>
                         <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                             <input type="hidden" name="action" value="update_config">
                             <input type="hidden" name="key" value="manual_payout_enabled">
                             <input type="hidden" name="value" value="<?php echo $manualPayoutEnabled ? '0' : '1'; ?>">
@@ -140,6 +142,7 @@ include '../includes/dashboard-head.php';
                         </div>
                         <?php $payoutEnabled = getConfig('payout_enabled', '1') === '1'; ?>
                         <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                             <input type="hidden" name="action" value="update_config">
                             <input type="hidden" name="key" value="payout_enabled">
                             <input type="hidden" name="value" value="<?php echo $payoutEnabled ? '0' : '1'; ?>">
@@ -155,6 +158,7 @@ include '../includes/dashboard-head.php';
                             <span class="text-[10px] text-slate-500">Max requests per merchant</span>
                         </div>
                         <form method="POST" class="flex items-center gap-2">
+                            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                             <input type="hidden" name="action" value="update_config">
                             <input type="hidden" name="key" value="max_manual_payouts_limit">
                             <input type="number" name="value" value="<?php echo getConfig('max_manual_payouts_limit', '1'); ?>" class="w-12 px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-bold text-center">
@@ -211,6 +215,7 @@ include '../includes/dashboard-head.php';
                             Admin Profile
                         </h3>
                         <form method="POST" class="space-y-4">
+                            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                             <input type="hidden" name="action" value="update_profile">
                             <div>
                                 <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Display Name</label>

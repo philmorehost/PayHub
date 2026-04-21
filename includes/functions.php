@@ -54,7 +54,7 @@ function ensure_critical_tables() {
     if (!isInstalled()) return;
 
     // Quick version check to avoid redundant DB calls on every request
-    $version = '1.2.0';
+    $version = '1.2.1';
     if (getConfig('sys_db_version') === $version) return;
 
     try {
@@ -125,7 +125,9 @@ function ensure_critical_tables() {
                 'rc_number' => "VARCHAR(100)",
                 'two_factor_secret' => "VARCHAR(255)",
                 'two_factor_enabled' => "TINYINT DEFAULT 0",
-                'security_pin' => "VARCHAR(255)"
+                'security_pin' => "VARCHAR(255)",
+                'phone_number' => "VARCHAR(50)",
+                'settlement_currency' => "VARCHAR(10) DEFAULT 'NGN'"
             ],
             'transactions' => [
                 'customer_email' => "VARCHAR(255)",
