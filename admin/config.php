@@ -11,7 +11,9 @@ $db = Database::connect();
 
 // Handle Actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    if ($_POST['action'] === 'update_config') {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error_msg = "Invalid security token";
+    } elseif ($_POST['action'] === 'update_config') {
         $key = sanitize($_POST['key']);
         $value = $_POST['value'];
 

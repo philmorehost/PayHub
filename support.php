@@ -36,14 +36,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$userId, $is_registered ? null : $email, $subject, $is_registered]);
             $ticketId = $db->lastInsertId();
 
+            // If guest, $userId is null. ticket_messages.user_id is now NULLable.
             $stmt = $db->prepare("INSERT INTO ticket_messages (ticket_id, user_id, message) VALUES (?, ?, ?)");
-            // If guest, we use a system user or null? Let's use null if guest.
-            // In our schema ticket_messages has user_id FK, might need adjustment for guest messages.
-            // For now, let's just use the merchant ID if found, else we'll need to allow NULL user_id in ticket_messages
-            $stmt = $db->prepare("INSERT INTO ticket_messages (ticket_id, user_id, message) VALUES (?, ?, ?)");
-            // Actually, let's fix migration to allow NULL user_id in ticket_messages for guests
-            $db->exec("ALTER TABLE ticket_messages MODIFY user_id INT NULL");
-
             $stmt->execute([$ticketId, $userId, $message]);
 
             $db->commit();

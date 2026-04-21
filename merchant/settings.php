@@ -13,7 +13,9 @@ $success_msg = '';
 $error_msg = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    if ($_POST['action'] === 'update_profile') {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error_msg = "Invalid security token.";
+    } elseif ($_POST['action'] === 'update_profile') {
         $business_name = sanitize($_POST['business_name']);
         $email = sanitize($_POST['email']);
         $phone = sanitize($_POST['phone_number']);

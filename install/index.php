@@ -190,7 +190,7 @@ if ($stage === 2 && $_SERVER['REQUEST_METHOD'] === 'POST') {
             CREATE TABLE IF NOT EXISTS ticket_messages (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 ticket_id INT NOT NULL,
-                user_id INT NOT NULL,
+                user_id INT,
                 message TEXT NOT NULL,
                 is_admin TINYINT DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

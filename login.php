@@ -105,7 +105,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
             $pin = $_POST['security_pin'] ?? '';
-            if (!password_verify($pin, $user['security_pin'])) {
+            $pin_ok = true;
+            if (!empty($user['security_pin'])) {
+                $pin_ok = password_verify($pin, $user['security_pin']);
+            }
+
+            if (!$pin_ok) {
                 $error = 'Invalid Security PIN.';
                 $step = '2fa';
             } elseif ($gauth->checkCode($user['two_factor_secret'], $code)) {
@@ -151,6 +156,17 @@ if ($step === '2fa' && empty($_SESSION['pending_2fa_user_id'])) {
 }
 
 $pending_email = htmlspecialchars($_SESSION['pending_login_email'] ?? $_SESSION['pending_2fa_email'] ?? '');
+
+$pending_user_id = $_SESSION['pending_login_user_id'] ?? $_SESSION['pending_2fa_user_id'] ?? null;
+$pending_user = null;
+if ($pending_user_id) {
+    try {
+        $db = Database::connect();
+        $stmt = $db->prepare("SELECT * FROM users WHERE id = ?");
+        $stmt->execute([$pending_user_id]);
+        $pending_user = $stmt->fetch();
+    } catch (\Throwable $e) {}
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -203,16 +219,18 @@ $pending_email = htmlspecialchars($_SESSION['pending_login_email'] ?? $_SESSION[
                 <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                 <input type="hidden" name="action" value="verify_2fa">
                 <div>
-                    <label class="block text-sm font-bold text-slate-700 mb-2">Security PIN</label>
-                    <input
-                        type="password"
-                        name="security_pin"
-                        required
-                        maxlength="4"
-                        pattern="\d{4}"
-                        class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-center text-2xl tracking-[0.5em] font-bold mb-4"
-                        placeholder="0000"
-                    >
+                    <?php if (!empty($pending_user['security_pin'])): ?>
+                        <label class="block text-sm font-bold text-slate-700 mb-2">Security PIN</label>
+                        <input
+                            type="password"
+                            name="security_pin"
+                            required
+                            maxlength="4"
+                            pattern="\d{4}"
+                            class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-center text-2xl tracking-[0.5em] font-bold mb-4"
+                            placeholder="0000"
+                        >
+                    <?php endif; ?>
                     <label class="block text-sm font-bold text-slate-700 mb-2">Authenticator Code</label>
                     <input
                         type="text"

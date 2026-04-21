@@ -21,8 +21,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $ticketId = (int)$_POST['ticket_id'];
         $message = sanitize($_POST['message']);
 
-        $stmt = $db->prepare("INSERT INTO ticket_messages (ticket_id, message, is_admin) VALUES (?, ?, 1)");
-        $stmt->execute([$ticketId, $message]);
+        $stmt = $db->prepare("INSERT INTO ticket_messages (ticket_id, user_id, message, is_admin) VALUES (?, ?, ?, 1)");
+        $stmt->execute([$ticketId, $user['id'], $message]);
 
         // Get recipient
         $stmt = $db->prepare("SELECT t.guest_email, u.email as user_email, t.is_registered, t.subject FROM tickets t LEFT JOIN users u ON t.user_id = u.id WHERE t.id = ?");

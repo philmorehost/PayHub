@@ -86,49 +86,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     if ($amount < $min_payout) {
                         $error_msg = "Minimum payout amount is " . formatCurrency($min_payout);
                     } else {
-                        // Calculate available balance by deducting pending payouts
-                        $stmt = $db->prepare("SELECT SUM(amount) as pending_sum FROM payouts WHERE user_id = ? AND status = 'pending'");
-                        $stmt->execute([$user['id']]);
-                        $pending_payouts = (float)$stmt->fetch()['pending_sum'];
-                        $available_balance = $user['wallet_balance'] - $pending_payouts;
+                        $fee = calculate_payout_fee($amount);
+                        $total_deduction = $amount + $fee;
 
-                        if ($amount > $available_balance) {
-                            $error_msg = "Insufficient available balance. " . ($pending_payouts > 0 ? "You have " . formatCurrency($pending_payouts) . " in pending payout requests." : "");
+                        if ($total_deduction > $user['wallet_balance']) {
+                            $error_msg = "Insufficient balance. You need " . formatCurrency($total_deduction) . " (Amount + Fees) but your balance is " . formatCurrency($user['wallet_balance']);
                         } elseif ($amount > 0) {
                             if ($user['settlement_bank'] && $user['settlement_account_number']) {
-                                $fee = calculate_payout_fee($amount);
-                                $net = $amount - $fee;
+                                $db->beginTransaction();
+                                try {
+                                    $stmt = $db->prepare("INSERT INTO payouts (user_id, amount, fee_amount, net_amount, bank_name, account_number, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')");
+                                    $stmt->execute([$user['id'], $total_deduction, $fee, $amount, $user['settlement_bank'], $user['settlement_account_number']]);
 
-                                if ($net <= 0) {
-                                    $error_msg = "Amount after fees must be greater than zero.";
-                                } else {
-                                    $db->beginTransaction();
-                                    try {
-                                        $stmt = $db->prepare("INSERT INTO payouts (user_id, amount, fee_amount, net_amount, bank_name, account_number, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')");
-                                        $stmt->execute([$user['id'], $amount, $fee, $net, $user['settlement_bank'], $user['settlement_account_number']]);
+                                    log_ledger_entry($user['id'], $total_deduction, 'debit', 'payout', "Payout request (Net: ".formatCurrency($amount).") to " . $user['settlement_bank']);
 
-                                        log_ledger_entry($user['id'], $amount, 'debit', 'payout', "Payout request (Net: ".formatCurrency($net).") to " . $user['settlement_bank']);
+                                    $db->commit();
+                                    $success_msg = "Payout request submitted successfully.";
 
-                                        $db->commit();
-                                        $success_msg = "Payout request submitted successfully.";
-
-                                        // Activity Notification
-                                        sendEmail($user['email'], "Payout Requested", "
-                                            <p>A new payout request has been submitted from your dashboard.</p>
-                                            <ul>
-                                                <li><strong>Amount:</strong> " . formatCurrency($amount) . "</li>
-                                                <li><strong>Fee:</strong> " . formatCurrency($fee) . "</li>
-                                                <li><strong>Net Amount:</strong> " . formatCurrency($net) . "</li>
-                                                <li><strong>Bank:</strong> " . $user['settlement_bank'] . "</li>
-                                                <li><strong>Account:</strong> " . $user['settlement_account_number'] . "</li>
-                                            </ul>
-                                        ");
-                                        $user = getAuthUser();
-                                        $daily_count++;
-                                    } catch (Exception $e) {
-                                        $db->rollBack();
-                                        $error_msg = "Transaction failed: " . $e->getMessage();
-                                    }
+                                    // Activity Notification
+                                    sendEmail($user['email'], "Payout Requested", "
+                                        <p>A new payout request has been submitted from your dashboard.</p>
+                                        <ul>
+                                            <li><strong>Amount:</strong> " . formatCurrency($amount) . "</li>
+                                            <li><strong>Fee:</strong> " . formatCurrency($fee) . "</li>
+                                            <li><strong>Net Amount:</strong> " . formatCurrency($amount) . "</li>
+                                            <li><strong>Bank:</strong> " . $user['settlement_bank'] . "</li>
+                                            <li><strong>Account:</strong> " . $user['settlement_account_number'] . "</li>
+                                        </ul>
+                                    ");
+                                    $user = getAuthUser();
+                                    $daily_count++;
+                                } catch (Exception $e) {
+                                    $db->rollBack();
+                                    $error_msg = "Transaction failed: " . $e->getMessage();
                                 }
                             } else {
                                 $error_msg = "Please set up your settlement bank details in settings first.";

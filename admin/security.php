@@ -35,6 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $db->prepare("UPDATE users SET security_pin = ? WHERE id = ?");
                 $stmt->execute([$hashed_pin, $user['id']]);
                 $success = 'Security PIN updated successfully';
+                $user = getAuthUser();
 
                 // Notification
                 sendEmail($user['email'], 'Security PIN Updated', '<p>Your Admin Security PIN has been updated. If you did not do this, please contact support immediately.</p>');
@@ -43,7 +44,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $secret = $_POST['secret'] ?? '';
             $code = $_POST['code'] ?? '';
 
-            if ($gauth->checkCode($secret, $code)) {
+            if (empty($user['security_pin'])) {
+                $error = 'Please set a Security PIN before enabling 2FA to prevent administrative lockout.';
+            } elseif ($gauth->checkCode($secret, $code)) {
                 $stmt = $db->prepare("UPDATE users SET two_factor_secret = ?, two_factor_enabled = 1 WHERE id = ?");
                 $stmt->execute([$secret, $user['id']]);
                 $success = 'Google 2FA enabled successfully';
@@ -151,8 +154,13 @@ include '../includes/dashboard-head.php';
                                         <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                                         <input type="hidden" name="action" value="enable_2fa">
                                         <input type="hidden" name="secret" value="<?php echo $new_secret; ?>">
-                                        <input type="text" name="code" maxlength="6" placeholder="000000" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/20 text-center text-xl font-bold tracking-[0.5em]">
-                                        <button type="submit" class="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">Enable 2FA</button>
+                                        <input type="text" name="code" maxlength="6" placeholder="000000" required <?php echo empty($user['security_pin']) ? 'disabled' : ''; ?> class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/20 text-center text-xl font-bold tracking-[0.5em] disabled:opacity-50">
+
+                                        <?php if (empty($user['security_pin'])): ?>
+                                            <p class="text-[10px] text-rose-500 font-bold uppercase mb-2">Set Security PIN first to enable 2FA</p>
+                                        <?php endif; ?>
+
+                                        <button type="submit" <?php echo empty($user['security_pin']) ? 'disabled' : ''; ?> class="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50 disabled:shadow-none">Enable 2FA</button>
                                     </form>
                                 </div>
                             </div>

@@ -54,7 +54,7 @@ function ensure_critical_tables() {
     if (!isInstalled()) return;
 
     // Quick version check to avoid redundant DB calls on every request
-    $version = '1.1.4';
+    $version = '1.1.6';
     if (getConfig('sys_db_version') === $version) return;
 
     try {
@@ -167,6 +167,11 @@ function ensure_critical_tables() {
                 } catch (\Throwable $e) {}
             }
         }
+
+        // Allow NULL user_id in ticket_messages for guest tickets and admin replies
+        try {
+            $db->exec("ALTER TABLE ticket_messages MODIFY user_id INT NULL");
+        } catch (\Throwable $e) {}
 
         // Set version flag to skip future checks until next code update
         $stmt = $db->prepare("INSERT INTO config (`key`, `value`) VALUES ('sys_db_version', ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)");
