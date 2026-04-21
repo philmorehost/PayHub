@@ -11,7 +11,9 @@ $db = Database::connect();
 
 // Handle Actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    if ($_POST['action'] === 'update_status') {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error_msg = "Invalid security token.";
+    } elseif ($_POST['action'] === 'update_status') {
         $ticketId = (int)$_POST['ticket_id'];
         $status = sanitize($_POST['status']);
         $stmt = $db->prepare("UPDATE tickets SET status = ? WHERE id = ?");
@@ -21,8 +23,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $ticketId = (int)$_POST['ticket_id'];
         $message = sanitize($_POST['message']);
 
-        $stmt = $db->prepare("INSERT INTO ticket_messages (ticket_id, message, is_admin) VALUES (?, ?, 1)");
-        $stmt->execute([$ticketId, $message]);
+        $stmt = $db->prepare("INSERT INTO ticket_messages (ticket_id, user_id, message, is_admin) VALUES (?, ?, ?, 1)");
+        $stmt->execute([$ticketId, $user['id'], $message]);
 
         // Get recipient
         $stmt = $db->prepare("SELECT t.guest_email, u.email as user_email, t.is_registered, t.subject FROM tickets t LEFT JOIN users u ON t.user_id = u.id WHERE t.id = ?");
@@ -77,8 +79,12 @@ include '../includes/dashboard-head.php';
                             <?php foreach ($tickets as $t): ?>
                                 <tr class="hover:bg-slate-50/50 transition-colors">
                                     <td class="px-4 sm:px-6 py-4">
-                                        <div class="font-bold text-slate-900 truncate max-w-[120px] sm:max-w-none"><?php echo $t['business_name']; ?></div>
-                                        <div class="hidden sm:block text-[10px] text-slate-500"><?php echo $t['user_email']; ?></div>
+                                        <div class="font-bold text-slate-900 truncate max-w-[120px] sm:max-w-none">
+                                            <?php echo $t['is_registered'] ? ($t['business_name'] ?: 'Registered Merchant') : 'Guest'; ?>
+                                        </div>
+                                        <div class="hidden sm:block text-[10px] text-slate-500">
+                                            <?php echo $t['is_registered'] ? $t['user_email'] : $t['guest_email']; ?>
+                                        </div>
                                     </td>
                                     <td class="px-4 sm:px-6 py-4 text-sm font-medium text-slate-700 truncate max-w-[150px] sm:max-w-none"><?php echo $t['subject']; ?></td>
                                     <td class="hidden lg:table-cell px-6 py-4">
@@ -91,6 +97,7 @@ include '../includes/dashboard-head.php';
                                         <div class="flex gap-2">
                                             <button @click="showReply = true; ticketId = <?php echo $t['id']; ?>; ticketSubject = '<?php echo addslashes($t['subject']); ?>'" class="text-indigo-600 hover:underline text-xs font-bold">Reply</button>
                                             <form method="POST" class="inline">
+                                                <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                                                 <input type="hidden" name="action" value="update_status">
                                                 <input type="hidden" name="ticket_id" value="<?php echo $t['id']; ?>">
                                                 <button type="submit" name="status" value="resolved" class="text-emerald-600 hover:underline text-xs font-bold">Resolve</button>
@@ -118,6 +125,7 @@ include '../includes/dashboard-head.php';
                     <p class="text-xs font-bold text-slate-400 uppercase mb-2">Subject</p>
                     <p class="text-sm font-bold text-slate-900 mb-6" x-text="ticketSubject"></p>
                     <form method="POST" class="space-y-6">
+                        <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                         <input type="hidden" name="action" value="reply_ticket">
                         <input type="hidden" name="ticket_id" :value="ticketId">
                         <textarea name="message" required rows="6" placeholder="Type your response here..." class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 outline-none"></textarea>

@@ -16,84 +16,88 @@ $error = '';
 $step = 'form'; // 'form' | 'otp'
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? 'send_otp';
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error = 'Invalid security token. Please try again.';
+    } else {
+        $action = $_POST['action'] ?? 'send_otp';
 
-    if ($action === 'send_otp') {
-        $email         = sanitize($_POST['email'] ?? '');
-        $password      = $_POST['password'] ?? '';
-        $full_name     = sanitize($_POST['full_name'] ?? '');
-        $business_name = sanitize($_POST['business_name'] ?? '');
+        if ($action === 'send_otp') {
+            $email         = sanitize($_POST['email'] ?? '');
+            $password      = $_POST['password'] ?? '';
+            $full_name     = sanitize($_POST['full_name'] ?? '');
+            $business_name = sanitize($_POST['business_name'] ?? '');
 
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $error = 'Please enter a valid email address';
-        } elseif (strlen($password) < 6) {
-            $error = 'Password must be at least 6 characters';
-        } elseif (empty($full_name)) {
-            $error = 'Full name is required';
-        } elseif (empty($business_name)) {
-            $error = 'Business name is required';
-        } else {
-            $db   = Database::connect();
-            $stmt = $db->prepare("SELECT id FROM users WHERE email = ?");
-            $stmt->execute([$email]);
-            if ($stmt->fetch()) {
-                $error = 'Email already registered';
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                $error = 'Please enter a valid email address';
+            } elseif (strlen($password) < 6) {
+                $error = 'Password must be at least 6 characters';
+            } elseif (empty($full_name)) {
+                $error = 'Full name is required';
+            } elseif (empty($business_name)) {
+                $error = 'Business name is required';
             } else {
-                // Store pending registration in session
-                $_SESSION['pending_registration'] = [
-                    'email'         => $email,
-                    'password_hash' => password_hash($password, PASSWORD_DEFAULT),
-                    'full_name'     => $full_name,
-                    'business_name' => $business_name,
-                ];
+                $db   = Database::connect();
+                $stmt = $db->prepare("SELECT id FROM users WHERE email = ?");
+                $stmt->execute([$email]);
+                if ($stmt->fetch()) {
+                    $error = 'Email already registered';
+                } else {
+                    // Store pending registration in session
+                    $_SESSION['pending_registration'] = [
+                        'email'         => $email,
+                        'password_hash' => password_hash($password, PASSWORD_DEFAULT),
+                        'full_name'     => $full_name,
+                        'business_name' => $business_name,
+                    ];
 
+                    if (generate_and_send_otp($email, 'registration')) {
+                        $step = 'otp';
+                    } else {
+                        $error = 'Failed to send verification email. Please try again.';
+                        unset($_SESSION['pending_registration']);
+                    }
+                }
+            }
+        } elseif ($action === 'verify_otp') {
+            $otp = trim($_POST['otp'] ?? '');
+
+            if (empty($_SESSION['pending_registration'])) {
+                $error = 'Session expired. Please start over.';
+            } else {
+                $pending = $_SESSION['pending_registration'];
+                $email   = $pending['email'];
+
+                if (verify_otp($email, $otp, 'registration')) {
+                    $db         = Database::connect();
+                    $public_key = generateApiKey('pk_live_');
+                    $secret_key = generateApiKey('sk_live_');
+                    $test_pk    = generateApiKey('pk_test_');
+                    $test_sk    = generateApiKey('sk_test_');
+
+                    $stmt = $db->prepare("INSERT INTO users (email, password_hash, full_name, business_name, public_key, secret_key, test_public_key, test_secret_key, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'merchant')");
+                    if ($stmt->execute([$email, $pending['password_hash'], $pending['full_name'], $pending['business_name'], $public_key, $secret_key, $test_pk, $test_sk])) {
+                        unset($_SESSION['pending_registration']);
+                        redirect('login.php?registered=1');
+                    } else {
+                        $error = 'Registration failed. Please try again.';
+                        $step  = 'otp';
+                    }
+                } else {
+                    $error = 'Invalid or expired verification code. Please try again.';
+                    $step  = 'otp';
+                }
+            }
+        } elseif ($action === 'resend_otp') {
+            if (empty($_SESSION['pending_registration'])) {
+                $error = 'Session expired. Please start over.';
+            } else {
+                $email = $_SESSION['pending_registration']['email'];
                 if (generate_and_send_otp($email, 'registration')) {
                     $step = 'otp';
                 } else {
-                    $error = 'Failed to send verification email. Please try again.';
-                    unset($_SESSION['pending_registration']);
-                }
-            }
-        }
-    } elseif ($action === 'verify_otp') {
-        $otp = trim($_POST['otp'] ?? '');
-
-        if (empty($_SESSION['pending_registration'])) {
-            $error = 'Session expired. Please start over.';
-        } else {
-            $pending = $_SESSION['pending_registration'];
-            $email   = $pending['email'];
-
-            if (verify_otp($email, $otp, 'registration')) {
-                $db         = Database::connect();
-                $public_key = generateApiKey('pk_live_');
-                $secret_key = generateApiKey('sk_live_');
-                $test_pk    = generateApiKey('pk_test_');
-                $test_sk    = generateApiKey('sk_test_');
-
-                $stmt = $db->prepare("INSERT INTO users (email, password_hash, full_name, business_name, public_key, secret_key, test_public_key, test_secret_key, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'merchant')");
-                if ($stmt->execute([$email, $pending['password_hash'], $pending['full_name'], $pending['business_name'], $public_key, $secret_key, $test_pk, $test_sk])) {
-                    unset($_SESSION['pending_registration']);
-                    redirect('login.php?registered=1');
-                } else {
-                    $error = 'Registration failed. Please try again.';
+                    $error = 'Failed to resend code. Please try again.';
                     $step  = 'otp';
                 }
-            } else {
-                $error = 'Invalid or expired verification code. Please try again.';
-                $step  = 'otp';
-            }
-        }
-    } elseif ($action === 'resend_otp') {
-        if (empty($_SESSION['pending_registration'])) {
-            $error = 'Session expired. Please start over.';
-        } else {
-            $email = $_SESSION['pending_registration']['email'];
-            if (generate_and_send_otp($email, 'registration')) {
-                $step = 'otp';
-            } else {
-                $error = 'Failed to resend code. Please try again.';
-                $step  = 'otp';
             }
         }
     }
@@ -157,6 +161,7 @@ $pending_email = htmlspecialchars($_SESSION['pending_registration']['email'] ?? 
                 <?php if ($step === 'otp'): ?>
                 <!-- Step 2: OTP Verification -->
                 <form method="POST" class="space-y-5">
+                    <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                     <input type="hidden" name="action" value="verify_otp">
                     <div>
                         <label class="block text-sm font-bold text-slate-700 mb-2">Verification Code</label>
@@ -182,6 +187,7 @@ $pending_email = htmlspecialchars($_SESSION['pending_registration']['email'] ?? 
 
                 <div class="mt-6 text-center">
                     <form method="POST" class="inline">
+                        <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                         <input type="hidden" name="action" value="resend_otp">
                         <button type="submit" class="text-sm text-indigo-600 font-bold hover:text-indigo-700">
                             Resend code
@@ -194,6 +200,7 @@ $pending_email = htmlspecialchars($_SESSION['pending_registration']['email'] ?? 
                 <?php else: ?>
                 <!-- Step 1: Registration Form -->
                 <form method="POST" class="space-y-5">
+                    <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                     <input type="hidden" name="action" value="send_otp">
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
@@ -308,4 +315,3 @@ $pending_email = htmlspecialchars($_SESSION['pending_registration']['email'] ?? 
     <script>lucide.createIcons();</script>
 </body>
 </html>
-

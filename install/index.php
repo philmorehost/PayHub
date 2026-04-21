@@ -190,7 +190,7 @@ if ($stage === 2 && $_SERVER['REQUEST_METHOD'] === 'POST') {
             CREATE TABLE IF NOT EXISTS ticket_messages (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 ticket_id INT NOT NULL,
-                user_id INT NOT NULL,
+                user_id INT,
                 message TEXT NOT NULL,
                 is_admin TINYINT DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -281,6 +281,17 @@ if ($stage === 2 && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 `key` VARCHAR(100) PRIMARY KEY,
                 `value` TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB;
+
+            CREATE TABLE IF NOT EXISTS otp_codes (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                otp_code VARCHAR(6) NOT NULL,
+                purpose ENUM('registration','login') NOT NULL,
+                expires_at DATETIME NOT NULL,
+                used TINYINT DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_email_purpose (email, purpose)
             ) ENGINE=InnoDB;
 
             INSERT INTO blog_posts (title, slug, content, excerpt) VALUES

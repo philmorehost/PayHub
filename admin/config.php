@@ -11,13 +11,18 @@ $db = Database::connect();
 
 // Handle Actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    if ($_POST['action'] === 'update_config') {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error_msg = "Invalid security token";
+    } elseif ($_POST['action'] === 'update_config') {
         $key = sanitize($_POST['key']);
         $value = $_POST['value'];
 
         $stmt = $db->prepare("INSERT INTO config (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)");
         $stmt->execute([$key, $value]);
         $success_msg = "Configuration updated: $key";
+
+        // Activity Notification
+        sendEmail($user['email'], "System Config Changed: $key", "<p>The system configuration for <strong>$key</strong> has been updated to: <code>$value</code></p><p>Changed by: {$user['email']}</p>");
         // Flush migration cache if key is sys_db_version
         if ($key === 'sys_db_version') {
             ensure_critical_tables();
@@ -103,6 +108,7 @@ include '../includes/dashboard-head.php';
                         </div>
                         <?php $globalPayoutReview = getConfig('global_payout_review') === '1'; ?>
                         <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                             <input type="hidden" name="action" value="update_config">
                             <input type="hidden" name="key" value="global_payout_review">
                             <input type="hidden" name="value" value="<?php echo $globalPayoutReview ? '0' : '1'; ?>">
@@ -119,6 +125,7 @@ include '../includes/dashboard-head.php';
                         </div>
                         <?php $manualPayoutEnabled = getConfig('manual_payout_enabled', '1') === '1'; ?>
                         <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                             <input type="hidden" name="action" value="update_config">
                             <input type="hidden" name="key" value="manual_payout_enabled">
                             <input type="hidden" name="value" value="<?php echo $manualPayoutEnabled ? '0' : '1'; ?>">
@@ -135,6 +142,7 @@ include '../includes/dashboard-head.php';
                         </div>
                         <?php $payoutEnabled = getConfig('payout_enabled', '1') === '1'; ?>
                         <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                             <input type="hidden" name="action" value="update_config">
                             <input type="hidden" name="key" value="payout_enabled">
                             <input type="hidden" name="value" value="<?php echo $payoutEnabled ? '0' : '1'; ?>">
@@ -150,6 +158,7 @@ include '../includes/dashboard-head.php';
                             <span class="text-[10px] text-slate-500">Max requests per merchant</span>
                         </div>
                         <form method="POST" class="flex items-center gap-2">
+                            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                             <input type="hidden" name="action" value="update_config">
                             <input type="hidden" name="key" value="max_manual_payouts_limit">
                             <input type="number" name="value" value="<?php echo getConfig('max_manual_payouts_limit', '1'); ?>" class="w-12 px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-bold text-center">
@@ -206,6 +215,7 @@ include '../includes/dashboard-head.php';
                             Admin Profile
                         </h3>
                         <form method="POST" class="space-y-4">
+                            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                             <input type="hidden" name="action" value="update_profile">
                             <div>
                                 <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Display Name</label>
@@ -256,8 +266,14 @@ include '../includes/dashboard-head.php';
                                 ['key' => 'transaction_fee_cap', 'label' => 'Local Fee Cap', 'desc' => 'Maximum fee for local transactions'],
                                 ['key' => 'international_fee_percent', 'label' => 'Intl. Fee (%)', 'desc' => 'Percentage fee on international collections'],
                                 ['key' => 'international_fee_flat', 'label' => 'Intl. Fee (Flat)', 'desc' => 'Flat fee on international collections'],
-                                ['key' => 'manual_payout_fee', 'label' => 'Manual Payout Fee', 'desc' => 'Fee charged for manual payout requests'],
-                                ['key' => 'automated_payout_fee', 'label' => 'Automated Payout Fee', 'desc' => 'Fee charged for automated daily payouts'],
+                                ['key' => 'payout_tier1_max', 'label' => 'Payout Tier 1 Max', 'desc' => 'Maximum amount for the first tier of payout fees'],
+                                ['key' => 'payout_tier1_fee', 'label' => 'Payout Tier 1 Fee', 'desc' => 'Fee for payouts within Tier 1'],
+                                ['key' => 'payout_tier2_max', 'label' => 'Payout Tier 2 Max', 'desc' => 'Maximum amount for the second tier of payout fees'],
+                                ['key' => 'payout_tier2_fee', 'label' => 'Payout Tier 2 Fee', 'desc' => 'Fee for payouts within Tier 2'],
+                                ['key' => 'payout_tier3_fee', 'label' => 'Payout Tier 3 Fee', 'desc' => 'Fee for payouts above Tier 2'],
+                                ['key' => 'stamp_duty_threshold', 'label' => 'Stamp Duty Threshold', 'desc' => 'Threshold for government stamp duty (Tax Act 2025)'],
+                                ['key' => 'stamp_duty_fee', 'label' => 'Stamp Duty Fee', 'desc' => 'Government stamp duty amount'],
+                                ['key' => 'payout_markup', 'label' => 'Payout Markup', 'desc' => 'Extra markup fee for PayHub profit'],
                                 ['key' => 'min_payout_amount', 'label' => 'Min Payout Amount', 'desc' => 'Minimum amount a merchant can request for payout'],
                                 ['key' => 'max_daily_payout_requests', 'label' => 'Max Daily Payouts', 'desc' => 'Max times a merchant can request payout per day'],
                                 ['key' => 'smtp_host', 'label' => 'SMTP Host', 'desc' => 'Email server address']

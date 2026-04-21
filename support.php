@@ -12,48 +12,46 @@ if (!isset($_SESSION['captcha_a'])) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'contact') {
-    $email = sanitize($_POST['email']);
-    $subject = sanitize($_POST['subject']);
-    $message = sanitize($_POST['message']);
-    $captcha = (int)$_POST['captcha'];
-
-    if ($captcha !== ($_SESSION['captcha_a'] + $_SESSION['captcha_b'])) {
-        $error_msg = "Incorrect captcha answer.";
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error_msg = "Invalid security token.";
     } else {
-        $db = Database::connect();
+        $email = sanitize($_POST['email']);
+        $subject = sanitize($_POST['subject']);
+        $message = sanitize($_POST['message']);
+        $captcha = (int)$_POST['captcha'];
 
-        // Check if merchant exists
-        $stmt = $db->prepare("SELECT id FROM users WHERE email = ?");
-        $stmt->execute([$email]);
-        $user = $stmt->fetch();
+        if ($captcha !== ($_SESSION['captcha_a'] + $_SESSION['captcha_b'])) {
+            $error_msg = "Incorrect captcha answer.";
+        } else {
+            $db = Database::connect();
 
-        $is_registered = $user ? 1 : 0;
-        $userId = $user ? $user['id'] : null;
+            // Check if merchant exists
+            $stmt = $db->prepare("SELECT id FROM users WHERE email = ?");
+            $stmt->execute([$email]);
+            $user = $stmt->fetch();
 
-        $db->beginTransaction();
-        try {
-            $stmt = $db->prepare("INSERT INTO tickets (user_id, guest_email, subject, is_registered, status) VALUES (?, ?, ?, ?, 'open')");
-            $stmt->execute([$userId, $is_registered ? null : $email, $subject, $is_registered]);
-            $ticketId = $db->lastInsertId();
+            $is_registered = $user ? 1 : 0;
+            $userId = $user ? $user['id'] : null;
 
-            $stmt = $db->prepare("INSERT INTO ticket_messages (ticket_id, user_id, message) VALUES (?, ?, ?)");
-            // If guest, we use a system user or null? Let's use null if guest.
-            // In our schema ticket_messages has user_id FK, might need adjustment for guest messages.
-            // For now, let's just use the merchant ID if found, else we'll need to allow NULL user_id in ticket_messages
-            $stmt = $db->prepare("INSERT INTO ticket_messages (ticket_id, user_id, message) VALUES (?, ?, ?)");
-            // Actually, let's fix migration to allow NULL user_id in ticket_messages for guests
-            $db->exec("ALTER TABLE ticket_messages MODIFY user_id INT NULL");
+            $db->beginTransaction();
+            try {
+                $stmt = $db->prepare("INSERT INTO tickets (user_id, guest_email, subject, is_registered, status) VALUES (?, ?, ?, ?, 'open')");
+                $stmt->execute([$userId, $is_registered ? null : $email, $subject, $is_registered]);
+                $ticketId = $db->lastInsertId();
 
-            $stmt->execute([$ticketId, $userId, $message]);
+                // If guest, $userId is null. ticket_messages.user_id is now NULLable.
+                $stmt = $db->prepare("INSERT INTO ticket_messages (ticket_id, user_id, message) VALUES (?, ?, ?)");
+                $stmt->execute([$ticketId, $userId, $message]);
 
-            $db->commit();
-            $success_msg = "Message sent! Our team will get back to you shortly.";
-            // Reset captcha
-            $_SESSION['captcha_a'] = rand(1, 10);
-            $_SESSION['captcha_b'] = rand(1, 10);
-        } catch (Exception $e) {
-            $db->rollBack();
-            $error_msg = "Failed to send message: " . $e->getMessage();
+                $db->commit();
+                $success_msg = "Message sent! Our team will get back to you shortly.";
+                // Reset captcha
+                $_SESSION['captcha_a'] = rand(1, 10);
+                $_SESSION['captcha_b'] = rand(1, 10);
+            } catch (Exception $e) {
+                $db->rollBack();
+                $error_msg = "Failed to send message: " . $e->getMessage();
+            }
         }
     }
 }
@@ -97,6 +95,7 @@ include 'includes/header.php';
                         <div class="mb-6 p-4 bg-red-50 text-red-700 rounded-2xl border border-red-100 font-medium"><?php echo $error_msg; ?></div>
                     <?php endif; ?>
                     <form method="POST" class="space-y-6">
+                        <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                         <input type="hidden" name="action" value="contact">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>

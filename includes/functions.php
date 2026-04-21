@@ -54,7 +54,7 @@ function ensure_critical_tables() {
     if (!isInstalled()) return;
 
     // Quick version check to avoid redundant DB calls on every request
-    $version = '1.1.2';
+    $version = '1.2.1';
     if (getConfig('sys_db_version') === $version) return;
 
     try {
@@ -71,7 +71,8 @@ function ensure_critical_tables() {
             'transaction_timeline' => "CREATE TABLE IF NOT EXISTS transaction_timeline (id INT AUTO_INCREMENT PRIMARY KEY, transaction_id INT, event_type VARCHAR(50), description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'payouts' => "CREATE TABLE IF NOT EXISTS payouts (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, amount DECIMAL(15,2), status ENUM('pending', 'processing', 'completed', 'failed') DEFAULT 'pending', reference VARCHAR(100), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'subscriptions' => "CREATE TABLE IF NOT EXISTS subscriptions (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, customer_email VARCHAR(255), plan_name VARCHAR(100), amount DECIMAL(15,2), status VARCHAR(20), next_billing_date DATE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
-            'support_tickets' => "CREATE TABLE IF NOT EXISTS support_tickets (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, subject VARCHAR(255), message TEXT, status ENUM('open', 'closed') DEFAULT 'open', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
+            'tickets' => "CREATE TABLE IF NOT EXISTS tickets (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT NULL, guest_email VARCHAR(255) NULL, is_registered TINYINT DEFAULT 1, subject VARCHAR(255), message TEXT, status ENUM('open', 'processing', 'resolved', 'closed') DEFAULT 'open', priority ENUM('low', 'medium', 'high', 'critical') DEFAULT 'medium', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
+            'ticket_messages' => "CREATE TABLE IF NOT EXISTS ticket_messages (id INT AUTO_INCREMENT PRIMARY KEY, ticket_id INT, user_id INT NULL, message TEXT, is_admin TINYINT DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'blog_posts' => "CREATE TABLE IF NOT EXISTS blog_posts (id INT AUTO_INCREMENT PRIMARY KEY, title VARCHAR(255), content TEXT, author VARCHAR(100), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'webhook_logs' => "CREATE TABLE IF NOT EXISTS webhook_logs (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, event_type VARCHAR(100), payload TEXT, response_code INT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'staff_roles' => "CREATE TABLE IF NOT EXISTS staff_roles (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, role VARCHAR(50), permissions TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
@@ -121,7 +122,12 @@ function ensure_critical_tables() {
                 'id_expiry_date' => "DATE",
                 'bvn' => "VARCHAR(20)",
                 'residential_address' => "TEXT",
-                'rc_number' => "VARCHAR(100)"
+                'rc_number' => "VARCHAR(100)",
+                'two_factor_secret' => "VARCHAR(255)",
+                'two_factor_enabled' => "TINYINT DEFAULT 0",
+                'security_pin' => "VARCHAR(255)",
+                'phone_number' => "VARCHAR(50)",
+                'settlement_currency' => "VARCHAR(10) DEFAULT 'NGN'"
             ],
             'transactions' => [
                 'customer_email' => "VARCHAR(255)",
@@ -163,6 +169,49 @@ function ensure_critical_tables() {
                     }
                 } catch (\Throwable $e) {}
             }
+        }
+
+        // Ensure support system columns and fix foreign key constraints
+        // 1. Identify and Drop foreign keys on ticket_messages that point to users
+        try {
+            // Drop ALL foreign keys on ticket_messages to be sure
+            $fks = $db->query("SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_NAME = 'ticket_messages' AND CONSTRAINT_TYPE = 'FOREIGN KEY' AND TABLE_SCHEMA = DATABASE()")->fetchAll();
+            foreach ($fks as $fk) {
+                $db->exec("ALTER TABLE ticket_messages DROP FOREIGN KEY " . $fk['CONSTRAINT_NAME']);
+            }
+        } catch (\Throwable $e) {
+            error_log("FK Drop Error: " . $e->getMessage());
+        }
+
+        // 2. Ensure tickets and ticket_messages tables have correct schema
+        try {
+            // Aggressive schema fix
+            $db->exec("ALTER TABLE tickets MODIFY user_id INT NULL");
+            $db->exec("ALTER TABLE ticket_messages MODIFY user_id INT NULL");
+
+            $colsToAdd = [
+                'tickets' => [
+                    'guest_email' => "VARCHAR(255) NULL AFTER user_id",
+                    'is_registered' => "TINYINT DEFAULT 1 AFTER guest_email",
+                    'priority' => "ENUM('low', 'medium', 'high', 'critical') DEFAULT 'medium' AFTER status"
+                ],
+                'ticket_messages' => [
+                    'is_admin' => "TINYINT DEFAULT 0 AFTER message"
+                ]
+            ];
+
+            foreach ($colsToAdd as $table => $columns) {
+                foreach ($columns as $col => $def) {
+                    try {
+                        $cCheck = $db->query("SHOW COLUMNS FROM `$table` LIKE '$col'")->fetch();
+                        if (!$cCheck) {
+                            $db->exec("ALTER TABLE `$table` ADD `$col` $def");
+                        }
+                    } catch (\Throwable $e) {}
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log("Support Schema Fix Error: " . $e->getMessage());
         }
 
         // Set version flag to skip future checks until next code update
@@ -464,6 +513,38 @@ function paystack_payout($userId, $amount, $reason = "Merchant Payout", $customB
     return $transfer;
 }
 
+/**
+ * Calculates the payout fee based on tiered structure and stamp duty rules.
+ */
+function calculate_payout_fee($amount) {
+    // 1. Determine the Base Transfer Fee
+    $tier1_max = (float)getConfig('payout_tier1_max', '5000');
+    $tier1_fee = (float)getConfig('payout_tier1_fee', '10');
+
+    $tier2_max = (float)getConfig('payout_tier2_max', '50000');
+    $tier2_fee = (float)getConfig('payout_tier2_fee', '25');
+
+    $tier3_fee = (float)getConfig('payout_tier3_fee', '50');
+
+    if ($amount <= $tier1_max) {
+        $transferFee = $tier1_fee;
+    } elseif ($amount <= $tier2_max) {
+        $transferFee = $tier2_fee;
+    } else {
+        $transferFee = $tier3_fee;
+    }
+
+    // 2. Add Government Stamp Duty (Tax Act 2025)
+    $stamp_threshold = (float)getConfig('stamp_duty_threshold', '10000');
+    $stamp_fee = (float)getConfig('stamp_duty_fee', '50');
+    $stampDuty = ($amount >= $stamp_threshold) ? $stamp_fee : 0;
+
+    // 3. Add PayHub's "Markup" for profit
+    $payhubMargin = (float)getConfig('payout_markup', '0');
+
+    return $transferFee + $stampDuty + $payhubMargin;
+}
+
 function calculate_fees($amount, $is_international = false, $userId = null) {
     $percent = null;
     $flat = null;
@@ -618,10 +699,9 @@ function generate_and_send_otp($email, $purpose) {
            ->execute([$email, $purpose]);
 
         $otp = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        $expires_at = date('Y-m-d H:i:s', time() + 600); // 10 minutes
 
-        $stmt = $db->prepare("INSERT INTO otp_codes (email, otp_code, purpose, expires_at) VALUES (?, ?, ?, ?)");
-        $stmt->execute([$email, $otp, $purpose, $expires_at]);
+        $stmt = $db->prepare("INSERT INTO otp_codes (email, otp_code, purpose, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))");
+        $stmt->execute([$email, $otp, $purpose]);
 
         $site_name = getConfig('site_name', 'Payhub');
         $subject = "Your {$site_name} verification code";
@@ -672,22 +752,51 @@ function sendEmail($to, $subject, $body) {
     $site_name = getConfig('site_name', 'Payhub');
     $logo = getConfig('site_logo');
 
+    // Development Fallback: Log email instead of sending if email_mock_mode is enabled
+    if (getConfig('email_mock_mode') === '1') {
+        error_log("sendEmail (MOCKED) to {$to}: [{$subject}] " . strip_tags($body));
+        return true;
+    }
+
     // Use smtp_user as From address when smtp_from is not configured
     if (empty($smtp_from)) {
         $smtp_from = $smtp_user ?: ('noreply@' . ($_SERVER['HTTP_HOST'] ?? 'localhost'));
     }
 
+    $logo_html = '';
+    if ($logo) {
+        $logo_url = BASE_URL . 'uploads/' . $logo;
+        $logo_html = "<img src='$logo_url' alt='$site_name' style='height: 40px; margin-bottom: 20px;'>";
+    }
+
+    $modern_body = "
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset='UTF-8'>
+        <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    </head>
+    <body style='margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f7fa; color: #334155;'>
+        <div style='max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 24px; overflow: hidden; shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); border: 1px solid #e2e8f0;'>
+            <div style='padding: 40px;'>
+                $logo_html
+                <div style='font-size: 16px; line-height: 1.6;'>
+                    $body
+                </div>
+                <div style='margin-top: 40px; padding-top: 24px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #94a3b8; text-align: center;'>
+                    &copy; " . date('Y') . " $site_name. All rights reserved.
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>";
+
     if (!$smtp_host || !$smtp_user) {
-        $logo_html = '';
-        if ($logo) {
-            $logo_url = BASE_URL . 'uploads/' . $logo;
-            $logo_html = "<div style='text-align: center; margin-bottom: 20px;'><img src='$logo_url' alt='$site_name' style='height: 60px; width: auto; max-width: 200px;'></div>";
-        }
         $headers = "MIME-Version: 1.0\r\nContent-type:text/html;charset=UTF-8\r\nFrom: $site_name <$smtp_from>\r\n";
-        $full_body = "<div style='padding: 40px;'>$logo_html $body</div>";
-        $result = mail($to, $subject, $full_body, $headers);
+        $result = mail($to, $subject, $modern_body, $headers);
         if (!$result) {
-            error_log("sendEmail: PHP mail() failed sending to {$to}");
+            $last_error = error_get_last();
+            error_log("sendEmail: PHP mail() failed sending to {$to}. Error: " . ($last_error['message'] ?? 'Unknown error'));
         }
         return $result;
     }
@@ -699,7 +808,6 @@ function sendEmail($to, $subject, $body) {
         $mail->SMTPAuth   = true;
         $mail->Username   = $smtp_user;
         $mail->Password   = $smtp_pass;
-        // Auto-detect encryption: port 465 uses SMTPS (SSL), everything else uses STARTTLS
         if ((int)$smtp_port === 465) {
             $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
         } else {
@@ -710,7 +818,7 @@ function sendEmail($to, $subject, $body) {
         $mail->addAddress($to);
         $mail->isHTML(true);
         $mail->Subject = $subject;
-        $mail->Body    = "<div style='background-color: #f9fafb; padding: 40px 0; font-family: sans-serif;'><div style='max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; padding: 40px;'>$body</div></div>";
+        $mail->Body    = $modern_body;
         $mail->send();
         return true;
     } catch (Exception $e) {

@@ -82,12 +82,6 @@ if ($amount < $min_payout) {
     exit;
 }
 
-if ($amount > $user['wallet_balance']) {
-    http_response_code(400);
-    echo json_encode(['status' => false, 'message' => 'Insufficient wallet balance']);
-    exit;
-}
-
 // 4. Rolling 24h Limit Enforcement
 $max_daily = (int)getConfig('max_manual_payouts_limit', '1');
 $stmt = $db->prepare("SELECT COUNT(*) as daily_count FROM payouts WHERE user_id = ? AND request_date >= DATE_SUB(NOW(), INTERVAL 24 HOUR)");
@@ -107,12 +101,15 @@ if ($daily_count >= $max_daily) {
 }
 
 // 5. Execution Logic
-$fee = (float)getConfig('manual_payout_fee', '0');
-$net = $amount - $fee;
+$fee = calculate_payout_fee($amount);
+$total_deduction = $amount + $fee;
 
-if ($net <= 0) {
+if ($total_deduction > $user['wallet_balance']) {
     http_response_code(400);
-    echo json_encode(['status' => false, 'message' => 'Amount after fees must be greater than zero']);
+    echo json_encode([
+        'status' => false,
+        'message' => 'Insufficient balance. You need ' . formatCurrency($total_deduction) . ' (Amount + Fees) but your balance is ' . formatCurrency($user['wallet_balance'])
+    ]);
     exit;
 }
 
@@ -120,18 +117,18 @@ $db->beginTransaction();
 try {
     // a. Record Payout (Reflecting provided bank details)
     $stmt = $db->prepare("INSERT INTO payouts (user_id, amount, fee_amount, net_amount, bank_name, account_number, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')");
-    $stmt->execute([$user['id'], $amount, $fee, $net, $target_bank_name, $target_account_number]);
+    $stmt->execute([$user['id'], $total_deduction, $fee, $amount, $target_bank_name, $target_account_number]);
     $payoutId = $db->lastInsertId();
 
     // b. Log Ledger & Deduct Balance
-    log_ledger_entry($user['id'], $amount, 'debit', 'payout', "Payout request via API (Net: ".formatCurrency($net).") to " . $target_bank_name, $is_test);
+    log_ledger_entry($user['id'], $total_deduction, 'debit', 'payout', "Payout request via API (Net: ".formatCurrency($amount).") to " . $target_bank_name, $is_test);
 
     // c. Call Paystack Transfer API (if not in review mode)
     $needs_review = (getConfig('global_payout_review') == '1') || ($user['require_payout_review'] == 1);
 
     $transfer_res = null;
     if (!$needs_review) {
-        $transfer_res = paystack_payout($user['id'], $net, $reason, [
+        $transfer_res = paystack_payout($user['id'], $amount, $reason, [
             'bank_name' => $target_bank_name,
             'bank_code' => $target_bank_code,
             'account_number' => $target_account_number,
@@ -145,14 +142,25 @@ try {
 
     $db->commit();
 
+    // Activity Notification
+    sendEmail($user['email'], "Payout Requested", "
+        <p>A new payout request has been initiated via API.</p>
+        <ul>
+            <li><strong>Amount:</strong> " . formatCurrency($amount) . "</li>
+            <li><strong>Status:</strong> " . ($needs_review ? 'Queued for Review' : 'Processed') . "</li>
+            <li><strong>Bank:</strong> $target_bank_name</li>
+            <li><strong>Account:</strong> $target_account_number</li>
+        </ul>
+    ");
+
     echo json_encode([
         'status' => true,
         'message' => $needs_review ? 'Payout request queued for review' : 'Payout initiated successfully',
         'data' => [
             'id' => $payoutId,
-            'amount' => $amount,
+            'amount' => $total_deduction,
             'fee' => $fee,
-            'net_amount' => $net,
+            'net_amount' => $amount,
             'status' => $needs_review ? 'pending' : 'processed',
             'bank' => $target_bank_name,
             'account' => $target_account_number
