@@ -29,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $files_to_handle = [
         'utility_bill', 'cac_cert', 'cac_form', 'id_card',
         'memart', 'bn_cert', 'bn_form', 'ngo_form',
-        'ngo_constitution', 'gov_auth_letter', 'gov_gazette', 'business_address_proof'
+        'ngo_constitution', 'gov_auth_letter'
     ];
     foreach ($files_to_handle as $field) {
         if (isset($_FILES[$field]) && $_FILES[$field]['error'] === UPLOAD_ERR_OK) {
@@ -274,18 +274,6 @@ include '../includes/dashboard-head.php';
                                         </div>
                                     </div>
 
-                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        <div class="p-6 border-2 border-dashed border-slate-200 rounded-3xl text-center relative hover:border-indigo-400 transition-colors">
-                                            <input type="file" name="business_address_proof" class="absolute inset-0 opacity-0 cursor-pointer">
-                                            <i data-lucide="map-pin" class="text-slate-400 mb-2"></i>
-                                            <p class="text-xs font-bold text-slate-900 uppercase">Address Proof</p>
-                                        </div>
-                                        <div class="p-6 border-2 border-dashed border-slate-200 rounded-3xl text-center relative hover:border-indigo-400 transition-colors">
-                                            <input type="file" name="gov_gazette" class="absolute inset-0 opacity-0 cursor-pointer">
-                                            <i data-lucide="file-text" class="text-slate-400 mb-2"></i>
-                                            <p class="text-xs font-bold text-slate-900 uppercase">Gov't Gazette</p>
-                                        </div>
-                                    </div>
                                 </div>
 
                                 <div class="space-y-6">

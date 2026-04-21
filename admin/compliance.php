@@ -272,9 +272,7 @@ include '../includes/dashboard-head.php';
                                     bn_form_path: {label: 'BN Form', icon: 'file-check'},
                                     ngo_form_path: {label: 'NGO Form', icon: 'file-check'},
                                     ngo_constitution_path: {label: 'Constitution', icon: 'book-open'},
-                                    gov_auth_letter_path: {label: 'Auth Letter', icon: 'mail'},
-                                    gov_gazette_path: {label: 'Gazette', icon: 'file-text'},
-                                    business_address_proof_path: {label: 'Address Proof', icon: 'map-pin'}
+                                    gov_auth_letter_path: {label: 'Auth Letter', icon: 'mail'}
                                 }" :key="key">
                                     <template x-if="merchant[key]">
                                         <div class="space-y-2">
