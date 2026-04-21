@@ -54,7 +54,7 @@ function ensure_critical_tables() {
     if (!isInstalled()) return;
 
     // Quick version check to avoid redundant DB calls on every request
-    $version = '1.1.6';
+    $version = '1.2.0';
     if (getConfig('sys_db_version') === $version) return;
 
     try {
@@ -71,7 +71,8 @@ function ensure_critical_tables() {
             'transaction_timeline' => "CREATE TABLE IF NOT EXISTS transaction_timeline (id INT AUTO_INCREMENT PRIMARY KEY, transaction_id INT, event_type VARCHAR(50), description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'payouts' => "CREATE TABLE IF NOT EXISTS payouts (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, amount DECIMAL(15,2), status ENUM('pending', 'processing', 'completed', 'failed') DEFAULT 'pending', reference VARCHAR(100), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'subscriptions' => "CREATE TABLE IF NOT EXISTS subscriptions (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, customer_email VARCHAR(255), plan_name VARCHAR(100), amount DECIMAL(15,2), status VARCHAR(20), next_billing_date DATE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
-            'support_tickets' => "CREATE TABLE IF NOT EXISTS support_tickets (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, subject VARCHAR(255), message TEXT, status ENUM('open', 'closed') DEFAULT 'open', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
+            'tickets' => "CREATE TABLE IF NOT EXISTS tickets (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT NULL, guest_email VARCHAR(255) NULL, is_registered TINYINT DEFAULT 1, subject VARCHAR(255), message TEXT, status ENUM('open', 'processing', 'resolved', 'closed') DEFAULT 'open', priority ENUM('low', 'medium', 'high', 'critical') DEFAULT 'medium', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
+            'ticket_messages' => "CREATE TABLE IF NOT EXISTS ticket_messages (id INT AUTO_INCREMENT PRIMARY KEY, ticket_id INT, user_id INT NULL, message TEXT, is_admin TINYINT DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'blog_posts' => "CREATE TABLE IF NOT EXISTS blog_posts (id INT AUTO_INCREMENT PRIMARY KEY, title VARCHAR(255), content TEXT, author VARCHAR(100), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'webhook_logs' => "CREATE TABLE IF NOT EXISTS webhook_logs (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, event_type VARCHAR(100), payload TEXT, response_code INT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
             'staff_roles' => "CREATE TABLE IF NOT EXISTS staff_roles (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, role VARCHAR(50), permissions TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB",
@@ -168,10 +169,48 @@ function ensure_critical_tables() {
             }
         }
 
-        // Allow NULL user_id in ticket_messages for guest tickets and admin replies
+        // Ensure support system columns and fix foreign key constraints
+        // 1. Identify and Drop foreign keys on ticket_messages that point to users
         try {
+            // Drop ALL foreign keys on ticket_messages to be sure
+            $fks = $db->query("SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_NAME = 'ticket_messages' AND CONSTRAINT_TYPE = 'FOREIGN KEY' AND TABLE_SCHEMA = DATABASE()")->fetchAll();
+            foreach ($fks as $fk) {
+                $db->exec("ALTER TABLE ticket_messages DROP FOREIGN KEY " . $fk['CONSTRAINT_NAME']);
+            }
+        } catch (\Throwable $e) {
+            error_log("FK Drop Error: " . $e->getMessage());
+        }
+
+        // 2. Ensure tickets and ticket_messages tables have correct schema
+        try {
+            // Aggressive schema fix
+            $db->exec("ALTER TABLE tickets MODIFY user_id INT NULL");
             $db->exec("ALTER TABLE ticket_messages MODIFY user_id INT NULL");
-        } catch (\Throwable $e) {}
+
+            $colsToAdd = [
+                'tickets' => [
+                    'guest_email' => "VARCHAR(255) NULL AFTER user_id",
+                    'is_registered' => "TINYINT DEFAULT 1 AFTER guest_email",
+                    'priority' => "ENUM('low', 'medium', 'high', 'critical') DEFAULT 'medium' AFTER status"
+                ],
+                'ticket_messages' => [
+                    'is_admin' => "TINYINT DEFAULT 0 AFTER message"
+                ]
+            ];
+
+            foreach ($colsToAdd as $table => $columns) {
+                foreach ($columns as $col => $def) {
+                    try {
+                        $cCheck = $db->query("SHOW COLUMNS FROM `$table` LIKE '$col'")->fetch();
+                        if (!$cCheck) {
+                            $db->exec("ALTER TABLE `$table` ADD `$col` $def");
+                        }
+                    } catch (\Throwable $e) {}
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log("Support Schema Fix Error: " . $e->getMessage());
+        }
 
         // Set version flag to skip future checks until next code update
         $stmt = $db->prepare("INSERT INTO config (`key`, `value`) VALUES ('sys_db_version', ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)");
